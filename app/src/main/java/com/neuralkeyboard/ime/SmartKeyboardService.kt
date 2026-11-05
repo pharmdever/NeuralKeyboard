@@ -2,6 +2,7 @@ package com.neuralkeyboard.ime
 
 import android.content.ClipDescription
 import android.content.ClipboardManager
+import android.content.Intent
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.os.Handler
@@ -12,13 +13,16 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import com.neuralkeyboard.core.ClipboardHistory
 import com.neuralkeyboard.core.KeyProximity
 import com.neuralkeyboard.core.Language
 import com.neuralkeyboard.core.LanguageModel
+import com.neuralkeyboard.core.SnippetStore
 import com.neuralkeyboard.core.SuggestionEngine
 import com.neuralkeyboard.core.TextHarvester
+import java.util.Date
 import java.util.EnumMap
 import java.util.concurrent.Executors
 
@@ -65,6 +69,11 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     private var clipboardManager: ClipboardManager? = null
     /** Text of the "just copied" chip, or null when it is not shown. */
     private var clipChip: String? = null
+    /** Snippet offered in the first suggestion slot because its trigger was typed. */
+    private var snippetChip: SnippetStore.Snippet? = null
+
+    private var snippets = SnippetStore()
+    private var snippetsVersion = -1L
     /** Wall-clock time of the last key press or paste. */
     private var lastTypedAt = 0L
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { onClipboardChanged() }
@@ -111,6 +120,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     override fun onCreateInputView(): View {
         val keyboard = KeyboardUi(this, this)
+        keyboard.setEffects(popup = prefs.keyPopup, pressAnimation = prefs.keyAnimation)
         ui = keyboard
         renderKeys()
         return keyboard.root
@@ -146,13 +156,16 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         autoCapOn = predictionOn && !isTechnical && prefs.autoCapitalize
 
         ui?.hapticsEnabled = prefs.haptics
-        ui?.hideClipboard()
+        ui?.setEffects(popup = prefs.keyPopup, pressAnimation = prefs.keyAnimation)
+        ui?.hidePanel()
+        reloadSnippetsIfChanged()
         clipboard.ttlMillis = prefs.clipboardTtlMillis
         if (!prefs.clipboardHistory) {
             clipboard.clearAll()
             prefs.clipboardFile.delete()
         }
         clipChip = null
+        snippetChip = null
         shift = ShiftState.OFF
         updateAutoShift()
         renderKeys()
@@ -240,6 +253,14 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     }
 
     private fun onSpace(ic: InputConnection) {
+        // ";soap" + space expands the snippet right away.
+        if (composing.isNotEmpty()) {
+            val snippet = snippets.find(composing.toString())
+            if (snippet != null && charBeforeComposing(ic) == ';') {
+                insertSnippet(ic, snippet, removeSemicolon = true)
+                return
+            }
+        }
         val now = SystemClock.uptimeMillis()
         if (composing.isNotEmpty()) {
             commitComposing(ic, autocorrect = true, separator = " ")
@@ -338,14 +359,17 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     override fun onSuggestionPicked(index: Int) {
         val ic = currentInputConnection ?: return
-        val chip = clipChip
-        if (chip != null) {
-            if (index == 0) {
-                paste(ic, chip)
-                return
-            }
+        val snippet = snippetChip
+        val clip = clipChip
+        if (index == 0 && snippet != null) {
+            insertSnippet(ic, snippet, removeSemicolon = charBeforeComposing(ic) == ';')
+            return
         }
-        val offset = if (chip != null) 1 else 0
+        if (index == 0 && clip != null) {
+            paste(ic, clip)
+            return
+        }
+        val offset = if (snippet != null || clip != null) 1 else 0
         val picked = result.suggestions.getOrNull(index - offset)?.word ?: return
         val separator = if (language.spaceAfterWord) " " else ""
         ic.commitText(picked + separator, 1)
@@ -354,6 +378,76 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         previousWord = picked
         composing.clear()
         pendingUndo = null
+        updateAutoShift()
+        renderKeys()
+        updateSuggestions()
+    }
+
+    // ---------------------------------------------------------------- snippets
+
+    private fun reloadSnippetsIfChanged() {
+        val file = prefs.snippetsFile
+        val version = if (file.exists()) file.lastModified() else 0L
+        if (version == snippetsVersion) return
+        snippets = prefs.loadSnippets()
+        snippetsVersion = if (file.exists()) file.lastModified() else 0L
+    }
+
+    override fun onSnippetButton() {
+        val keyboard = ui ?: return
+        if (keyboard.openPanel == KeyboardUi.Panel.SNIPPETS) {
+            keyboard.hidePanel()
+            updateSuggestions()
+        } else {
+            currentInputConnection?.let { commitComposing(it, autocorrect = false) }
+            reloadSnippetsIfChanged()
+            keyboard.showSnippets(snippets.snippets)
+        }
+    }
+
+    override fun onSnippetPicked(trigger: String) {
+        val ic = currentInputConnection ?: return
+        val snippet = snippets.find(trigger) ?: return
+        insertSnippet(ic, snippet, removeSemicolon = false)
+    }
+
+    override fun onEditSnippets() {
+        ui?.hidePanel()
+        startActivity(Intent(this, SnippetsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    /** The character just before the word being composed (or before the cursor). */
+    private fun charBeforeComposing(ic: InputConnection): Char? {
+        val before = ic.getTextBeforeCursor(composing.length + 1, 0) ?: return null
+        return if (before.length == composing.length + 1) before[0] else null
+    }
+
+    /**
+     * Replaces the typed trigger (and a leading ";") with the snippet text, then puts
+     * the cursor where the snippet's {cursor} marker was.
+     */
+    private fun insertSnippet(ic: InputConnection, snippet: SnippetStore.Snippet, removeSemicolon: Boolean) {
+        val expansion = snippets.expand(snippet, Date(), clipboard.items.firstOrNull()?.text)
+        ic.beginBatchEdit()
+        if (composing.isNotEmpty()) {
+            ic.setComposingText("", 1)
+            composing.clear()
+        }
+        if (removeSemicolon) ic.deleteSurroundingText(1, 0)
+        ic.commitText(expansion.text, 1)
+        val back = expansion.text.length - expansion.cursor
+        if (back > 0) {
+            ic.getExtractedText(ExtractedTextRequest(), 0)?.let { et ->
+                val end = et.startOffset + et.selectionEnd
+                ic.setSelection(end - back, end - back)
+            }
+        }
+        ic.endBatchEdit()
+        previousWord = null
+        pendingUndo = null
+        snippetChip = null
+        lastTypedAt = System.currentTimeMillis()
+        ui?.hidePanel()
         updateAutoShift()
         renderKeys()
         updateSuggestions()
@@ -375,13 +469,13 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         saveClipboard()
         if (prefs.learnFromClipboard && prefs.learning) learnFromCopiedText(text)
         val keyboard = ui ?: return
-        if (keyboard.isClipboardOpen) refreshClipboardPanel() else updateSuggestions()
+        if (keyboard.openPanel == KeyboardUi.Panel.CLIPBOARD) refreshClipboardPanel() else updateSuggestions()
     }
 
     override fun onClipboardButton() {
         val keyboard = ui ?: return
-        if (keyboard.isClipboardOpen) {
-            keyboard.hideClipboard()
+        if (keyboard.openPanel == KeyboardUi.Panel.CLIPBOARD) {
+            keyboard.hidePanel()
             updateSuggestions()
         } else {
             currentInputConnection?.let { commitComposing(it, autocorrect = false) }
@@ -423,7 +517,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         pendingUndo = null
         clipChip = null
         lastTypedAt = System.currentTimeMillis()
-        ui?.hideClipboard()
+        ui?.hidePanel()
         updateAutoShift()
         renderKeys()
         updateSuggestions()
@@ -545,11 +639,19 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
                 ?.takeIf { it.time > lastTypedAt } // hide once the user has typed since copying
                 ?.text
         } else null
-        clipChip?.let { text ->
+        // The typed word is a snippet trigger: offer its expansion first.
+        snippetChip = if (predictionOn && composing.isNotEmpty()) snippets.find(composing.toString()) else null
+        val chipText = snippetChip?.text ?: clipChip
+        chipText?.let { text ->
             words = listOf(text.trim().replace(Regex("\\s+"), " ")) + words.take(KeyboardUi.SLOTS - 1)
             highlight = if (highlight >= 0) highlight + 1 else -1
         }
-        keyboard.setSuggestions(words, highlight, clipChip = clipChip != null)
+        val chip = when {
+            snippetChip != null -> KeyboardUi.Chip.SNIPPET
+            clipChip != null -> KeyboardUi.Chip.CLIPBOARD
+            else -> null
+        }
+        keyboard.setSuggestions(words, highlight, chip)
     }
 
     /** Last whole word before the cursor, used for prediction after the cursor moves. */

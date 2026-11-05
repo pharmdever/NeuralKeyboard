@@ -19,6 +19,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SnippetsActivity"
+            android:exported="false"
+            android:label="@string/snippets_title"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".SmartKeyboardService"
             android:exported="true"

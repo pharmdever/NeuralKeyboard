@@ -9,4 +9,5 @@
     <color name="suggestion_text">#37474F</color>
     <color name="accent">#1E88E5</color>
     <color name="divider">#B0BEC5</color>
+    <color name="preview_background">#FFFFFF</color>
 </resources>

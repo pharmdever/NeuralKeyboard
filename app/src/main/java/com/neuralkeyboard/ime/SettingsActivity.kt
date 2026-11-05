@@ -56,11 +56,18 @@ class SettingsActivity : Activity() {
             minLines = 3
         })
 
+        column.addView(heading(R.string.snippets_title))
+        column.addView(button(R.string.manage_snippets) {
+            startActivity(Intent(this, SnippetsActivity::class.java))
+        })
+
         column.addView(heading(R.string.prefs_title))
         column.addView(toggle(R.string.pref_autocorrect, prefs.autocorrect) { prefs.autocorrect = it })
         column.addView(toggle(R.string.pref_auto_cap, prefs.autoCapitalize) { prefs.autoCapitalize = it })
         column.addView(toggle(R.string.pref_double_space, prefs.doubleSpacePeriod) { prefs.doubleSpacePeriod = it })
         column.addView(toggle(R.string.pref_haptics, prefs.haptics) { prefs.haptics = it })
+        column.addView(toggle(R.string.pref_key_popup, prefs.keyPopup) { prefs.keyPopup = it })
+        column.addView(toggle(R.string.pref_key_animation, prefs.keyAnimation) { prefs.keyAnimation = it })
         column.addView(toggle(R.string.pref_learning, prefs.learning) { prefs.learning = it })
         column.addView(toggle(R.string.pref_clipboard, prefs.clipboardHistory) { prefs.clipboardHistory = it })
         column.addView(toggle(R.string.pref_learn_clipboard, prefs.learnFromClipboard) { prefs.learnFromClipboard = it })

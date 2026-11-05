@@ -32,4 +32,18 @@
     <string name="clipboard_unpin">เลิกปักหมุด</string>
     <string name="clipboard_delete">ลบ</string>
     <string name="keyboard_back">แป้นพิมพ์</string>
+    <string name="pref_key_popup">แสดงตัวอักษรขยายเมื่อกดปุ่ม</string>
+    <string name="pref_key_animation">แอนิเมชันปุ่มยุบเมื่อกด</string>
+    <string name="snippets_title">ข้อความลัด</string>
+    <string name="snippets_empty">ยังไม่มีข้อความลัด กด \"แก้ไข\" เพื่อเพิ่ม</string>
+    <string name="snippets_edit">แก้ไข</string>
+    <string name="manage_snippets">จัดการข้อความลัด</string>
+    <string name="snippets_help">พิมพ์คำลัด แล้วข้อความเต็มจะขึ้นที่ช่องแนะนำช่องแรก แตะเพื่อใส่\nพิมพ์ ; นำหน้า (เช่น ;soap) แล้วกดเว้นวรรค จะใส่ให้ทันที\nปุ่ม 📝 เหนือแป้นพิมพ์แสดงข้อความลัดทั้งหมด\n\nในข้อความใช้ได้:\n{cursor} ตำแหน่งเคอร์เซอร์หลังใส่ข้อความ\n{date} วันที่ · {time} เวลา · {clipboard} ข้อความที่คัดลอกล่าสุด</string>
+    <string name="snippet_add">+ เพิ่มข้อความลัด</string>
+    <string name="snippet_trigger">คำลัด (คำเดียว เช่น soap)</string>
+    <string name="snippet_text">ข้อความ</string>
+    <string name="snippet_save">บันทึก</string>
+    <string name="snippet_delete">ลบ</string>
+    <string name="snippet_cancel">ยกเลิก</string>
+    <string name="snippet_invalid">คำลัดต้องเป็นคำเดียว และข้อความต้องไม่ว่าง</string>
 </resources>

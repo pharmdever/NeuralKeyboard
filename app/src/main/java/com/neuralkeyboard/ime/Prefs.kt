@@ -3,6 +3,7 @@ package com.neuralkeyboard.ime
 import android.content.Context
 import android.content.SharedPreferences
 import com.neuralkeyboard.core.Language
+import com.neuralkeyboard.core.SnippetStore
 import java.io.File
 
 /** Typed access to the keyboard's settings, shared by the service and the settings screen. */
@@ -18,6 +19,8 @@ class Prefs(context: Context) {
     var learning by flag("learning", true)
     var clipboardHistory by flag("clipboard_history", true)
     var learnFromClipboard by flag("learn_from_clipboard", true)
+    var keyPopup by flag("key_popup", true)
+    var keyAnimation by flag("key_animation", true)
 
     /** How long unpinned clipboard items are kept, in hours; 0 = until deleted. */
     var clipboardRetentionHours: Int
@@ -42,6 +45,21 @@ class Prefs(context: Context) {
     val resetToken: Int get() = raw.getInt("reset_token", 0)
 
     fun userDataFile(language: Language) = File(app.filesDir, "user_${language.code}.tsv")
+
+    val snippetsFile: File get() = File(app.filesDir, "snippets.tsv")
+
+    /** The user's snippets; the starter set the first time. */
+    fun loadSnippets(): SnippetStore {
+        val file = snippetsFile
+        if (!file.exists()) return SnippetStore.defaults().also(::saveSnippets)
+        return SnippetStore().apply { runCatching { load(file.readText()) } }
+    }
+
+    fun saveSnippets(store: SnippetStore) {
+        val tmp = File(snippetsFile.path + ".tmp")
+        tmp.writeText(store.serialize())
+        tmp.renameTo(snippetsFile)
+    }
 
     /** Clipboard history, kept in the app's private storage. */
     val clipboardFile: File get() = File(app.filesDir, "clipboard_history.tsv")

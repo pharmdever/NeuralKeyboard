@@ -37,4 +37,18 @@
     <string name="clipboard_unpin">Unpin</string>
     <string name="clipboard_delete">Delete</string>
     <string name="keyboard_back">ABC</string>
+    <string name="pref_key_popup">Show enlarged character when pressing a key</string>
+    <string name="pref_key_animation">Key press animation</string>
+    <string name="snippets_title">Snippets</string>
+    <string name="snippets_empty">No snippets yet. Tap \"Edit\" to add one.</string>
+    <string name="snippets_edit">Edit</string>
+    <string name="manage_snippets">Manage snippets</string>
+    <string name="snippets_help">Type a trigger word: its text appears in the first suggestion slot – tap it to insert.\nType ; before the trigger (e.g. ;soap) and space inserts it right away.\nThe 📝 button above the keys lists all snippets.\n\nIn the text you can use:\n{cursor} where the cursor goes after inserting\n{date} today · {time} now · {clipboard} last copied text</string>
+    <string name="snippet_add">+ Add snippet</string>
+    <string name="snippet_trigger">Trigger (one word, e.g. soap)</string>
+    <string name="snippet_text">Text</string>
+    <string name="snippet_save">Save</string>
+    <string name="snippet_delete">Delete</string>
+    <string name="snippet_cancel">Cancel</string>
+    <string name="snippet_invalid">The trigger must be one word, and the text cannot be empty.</string>
 </resources>

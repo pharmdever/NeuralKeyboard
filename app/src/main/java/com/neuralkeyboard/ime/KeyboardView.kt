@@ -15,6 +15,9 @@ import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.AnimationUtils
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import kotlin.math.hypot
 
 /**
@@ -28,6 +31,20 @@ import kotlin.math.hypot
 class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(context) {
 
     var hapticsEnabled = true
+
+    /** Effect A: report the pressed character so the overlay can pop it up. */
+    var showPreview = true
+    var previewListener: ((label: String?, keyRect: RectF?) -> Unit)? = null
+    private var previewBox: KeyBox? = null
+
+    /** Effect B: pressed keys shrink a little and spring back on release. */
+    var animatePress = true
+
+    private class Anim(val from: Float, val to: Float, val start: Long, val duration: Long)
+
+    private val anims = HashMap<Key, Anim>()
+    private val pressEase = DecelerateInterpolator()
+    private val releaseEase = OvershootInterpolator(3f)
 
     private var rows: List<KeyRow> = emptyList()
     private var shift = ShiftState.OFF
@@ -108,7 +125,41 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
         val pressed = HashSet<KeyBox>()
         for (i in 0 until pointers.size()) pressed.add(pointers.valueAt(i).box)
         val pressedKeys = pressed.map { it.key }.toSet()
-        for (box in boxes) drawKey(canvas, box, box in pressed || box.key in pressedKeys)
+        val now = AnimationUtils.currentAnimationTimeMillis()
+        for (box in boxes) {
+            val scale = scaleOf(box.key, now)
+            if (scale != 1f) {
+                canvas.save()
+                canvas.scale(scale, scale, box.rect.centerX(), box.rect.centerY())
+            }
+            drawKey(canvas, box, box in pressed || box.key in pressedKeys)
+            if (scale != 1f) canvas.restore()
+        }
+        // Drop finished animations: released keys, and keys no longer on screen
+        // (e.g. a letter whose case changed). Only request frames while one runs.
+        val present = boxes.mapTo(HashSet()) { it.key }
+        anims.entries.removeAll { (key, a) -> now - a.start >= a.duration && (a.to == 1f || key !in present) }
+        if (anims.values.any { now - it.start < it.duration }) postInvalidateOnAnimation()
+    }
+
+    private fun scaleOf(key: Key, now: Long): Float {
+        val a = anims[key] ?: return 1f
+        val t = ((now - a.start).toFloat() / a.duration).coerceIn(0f, 1f)
+        val f = if (a.to < a.from) pressEase.getInterpolation(t) else releaseEase.getInterpolation(t)
+        return a.from + (a.to - a.from) * f
+    }
+
+    private fun animateKey(key: Key, down: Boolean) {
+        if (!animatePress || key.type == Key.Type.SPACER) return
+        val now = AnimationUtils.currentAnimationTimeMillis()
+        anims[key] = Anim(scaleOf(key, now), if (down) PRESSED_SCALE else 1f, now, if (down) PRESS_MS else RELEASE_MS)
+        postInvalidateOnAnimation()
+    }
+
+    private fun showPreviewFor(box: KeyBox, label: String) {
+        if (!showPreview) return
+        previewBox = box
+        previewListener?.invoke(label, box.rect)
     }
 
     private fun drawKey(canvas: Canvas, box: KeyBox, pressed: Boolean) {
@@ -174,6 +225,8 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
                 val p = Pointer(box)
                 pointers.put(event.getPointerId(idx), p)
                 if (hapticsEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                animateKey(box.key, down = true)
+                if (box.key.type == Key.Type.CHAR) showPreviewFor(box, box.key.label)
                 when {
                     box.key.type == Key.Type.DELETE -> {
                         p.fired = true
@@ -185,6 +238,7 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
                             if (!p.fired) {
                                 p.fired = true
                                 onKey(Key(Key.Type.CHAR, box.key.hint))
+                                showPreviewFor(box, box.key.hint)
                                 if (hapticsEnabled) performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                             }
                         }
@@ -215,6 +269,11 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
     private fun release(id: Int, p: Pointer) {
         p.longPress?.let { handlerMain.removeCallbacks(it) }
         pointers.remove(id)
+        animateKey(p.box.key, down = false)
+        if (previewBox === p.box || pointers.size() == 0) {
+            previewBox = null
+            previewListener?.invoke(null, null)
+        }
         invalidate(p.box)
     }
 
@@ -233,6 +292,9 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
     private fun cancelAllPointers() {
         for (i in 0 until pointers.size()) pointers.valueAt(i).longPress?.let { handlerMain.removeCallbacks(it) }
         pointers.clear()
+        anims.clear()
+        previewBox = null
+        previewListener?.invoke(null, null)
         invalidate()
     }
 
@@ -271,6 +333,9 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
 
     companion object {
         private const val LONG_PRESS_MS = 350L
+        private const val PRESSED_SCALE = 0.9f
+        private const val PRESS_MS = 70L
+        private const val RELEASE_MS = 180L
         private const val REPEAT_DELAY_MS = 400L
         private const val REPEAT_INTERVAL_MS = 50L
     }

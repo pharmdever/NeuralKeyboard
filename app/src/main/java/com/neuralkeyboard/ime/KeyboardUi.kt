@@ -2,6 +2,7 @@ package com.neuralkeyboard.ime
 
 import android.content.Context
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.text.TextUtils
@@ -9,17 +10,18 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
-import android.graphics.drawable.Drawable
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.neuralkeyboard.core.ClipboardHistory
+import com.neuralkeyboard.core.SnippetStore
 
 /**
- * Builds the keyboard views in code: a suggestion strip (with a clipboard button)
- * on top of either the rows of keys or the clipboard history panel.
+ * Builds the keyboard views in code: a suggestion strip (with clipboard and snippet
+ * buttons) on top of either the keys or a panel (clipboard history / snippets), plus
+ * a transparent overlay that draws the key-press popup above everything.
  */
 class KeyboardUi(private val context: Context, private val listener: Listener) {
 
@@ -31,7 +33,15 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         fun onClipPin(text: String, pinned: Boolean)
         fun onClipDelete(text: String)
         fun onClipClear()
+        fun onSnippetButton()
+        fun onSnippetPicked(trigger: String)
+        fun onEditSnippets()
     }
+
+    enum class Panel { CLIPBOARD, SNIPPETS }
+
+    /** What the first suggestion slot is showing, if it is a special chip. */
+    enum class Chip { CLIPBOARD, SNIPPET }
 
     var hapticsEnabled = true
         set(value) {
@@ -39,10 +49,20 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
             keyboardView.hapticsEnabled = value
         }
 
-    val root: LinearLayout = LinearLayout(context).apply {
+    var openPanel: Panel? = null
+        private set
+
+    private val content = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setBackgroundColor(color(R.color.kb_background))
         setPadding(dp(3), 0, dp(3), dp(4))
+    }
+    private val preview = KeyPreviewOverlay(context)
+
+    /** The view handed to the input method framework. */
+    val root: FrameLayout = FrameLayout(context).apply {
+        addView(content)
+        addView(preview, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
     }
 
     private val suggestionBar = LinearLayout(context).apply {
@@ -51,27 +71,19 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
     }
     private val suggestionViews = ArrayList<TextView>()
     private val keyboardView = KeyboardView(context) { listener.onKey(it) }
-    private val keyRows: View get() = keyboardView
-    private val clipPanel = LinearLayout(context).apply {
+    private val panel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         visibility = View.GONE
     }
-    private val clipButton = ImageView(context)
-
-    val isClipboardOpen: Boolean get() = clipPanel.visibility == View.VISIBLE
+    private val clipButton = toolbarButton(R.drawable.ic_clipboard, R.string.clipboard_title) { listener.onClipboardButton() }
+    private val snippetButton = toolbarButton(R.drawable.ic_snippet, R.string.snippets_title) { listener.onSnippetButton() }
 
     init {
-        clipButton.apply {
-            setImageDrawable(icon(R.drawable.ic_clipboard, R.color.suggestion_text))
-            scaleType = ImageView.ScaleType.CENTER
-            contentDescription = context.getString(R.string.clipboard_title)
-            background = pressable(android.graphics.Color.TRANSPARENT, color(R.color.key_background_pressed))
-            setOnClickListener {
-                haptic(this)
-                listener.onClipboardButton()
-            }
+        keyboardView.previewListener = { label, rect ->
+            if (label == null || rect == null) preview.hide() else preview.show(label, rect, keyboardView)
         }
-        suggestionBar.addView(clipButton, LinearLayout.LayoutParams(dp(44), LinearLayout.LayoutParams.MATCH_PARENT))
+        suggestionBar.addView(clipButton, LinearLayout.LayoutParams(dp(42), LinearLayout.LayoutParams.MATCH_PARENT))
+        suggestionBar.addView(snippetButton, LinearLayout.LayoutParams(dp(42), LinearLayout.LayoutParams.MATCH_PARENT))
         suggestionBar.addView(divider())
         repeat(SLOTS) { i ->
             if (i > 0) suggestionBar.addView(divider())
@@ -90,82 +102,168 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
             suggestionViews += tv
             suggestionBar.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         }
-        root.addView(suggestionBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
+        content.addView(suggestionBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
         val body = FrameLayout(context)
         body.addView(keyboardView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
-        body.addView(clipPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        root.addView(body)
+        body.addView(panel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        content.addView(body)
     }
 
-    /** Shows the clipboard panel in place of the keys (same height, so nothing jumps). */
-    fun showClipboard(items: List<ClipboardHistory.Item>, enabled: Boolean) {
-        clipPanel.removeAllViews()
+    /** Key-press effects (A: popup, B: press animation). */
+    fun setEffects(popup: Boolean, pressAnimation: Boolean) {
+        keyboardView.showPreview = popup
+        keyboardView.animatePress = pressAnimation
+        if (!popup) preview.hide()
+    }
 
+    // ------------------------------------------------------------------ panels
+
+    fun showClipboard(items: List<ClipboardHistory.Item>, enabled: Boolean) {
+        val rows = when {
+            !enabled -> listOf(hint(R.string.clipboard_off))
+            items.isEmpty() -> listOf(hint(R.string.clipboard_empty))
+            else -> items.map(::clipRow)
+        }
+        val clear = if (items.any { !it.pinned }) {
+            smallButton(context.getString(R.string.clipboard_clear), null) { listener.onClipClear() }
+        } else null
+        showPanel(Panel.CLIPBOARD, R.string.clipboard_title, clear, rows)
+    }
+
+    fun showSnippets(snippets: List<SnippetStore.Snippet>) {
+        val rows = if (snippets.isEmpty()) listOf(hint(R.string.snippets_empty)) else snippets.map(::snippetRow)
+        val edit = smallButton(context.getString(R.string.snippets_edit), R.drawable.ic_edit) { listener.onEditSnippets() }
+        showPanel(Panel.SNIPPETS, R.string.snippets_title, edit, rows)
+    }
+
+    /** Shows a panel in place of the keys (same height, so nothing jumps). */
+    private fun showPanel(which: Panel, title: Int, action: View?, rows: List<View>) {
+        panel.removeAllViews()
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(smallButton(context.getString(R.string.keyboard_back), R.drawable.ic_back) { listener.onClipboardButton() })
+        header.addView(smallButton(context.getString(R.string.keyboard_back), R.drawable.ic_back) { hidePanel() })
         header.addView(TextView(context).apply {
-            text = context.getString(R.string.clipboard_title)
+            setText(title)
             setTextColor(color(R.color.key_text))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        if (items.any { !it.pinned }) {
-            header.addView(smallButton(context.getString(R.string.clipboard_clear), null) { listener.onClipClear() })
-        }
-        clipPanel.addView(header, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(40)))
+        action?.let(header::addView)
+        panel.addView(header, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(40)))
 
         val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        when {
-            !enabled -> list.addView(hint(R.string.clipboard_off))
-            items.isEmpty() -> list.addView(hint(R.string.clipboard_empty))
-            else -> items.forEach { list.addView(clipRow(it)) }
-        }
-        clipPanel.addView(ScrollView(context).apply { addView(list) },
+        rows.forEach(list::addView)
+        panel.addView(ScrollView(context).apply { addView(list) },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        // Keep the keyboard height: the panel covers the key rows exactly.
-        keyRows.visibility = View.INVISIBLE
-        clipPanel.visibility = View.VISIBLE
-        clipButton.setImageDrawable(icon(R.drawable.ic_clipboard, R.color.accent))
+        keyboardView.visibility = View.INVISIBLE
+        panel.visibility = View.VISIBLE
+        openPanel = which
+        preview.hide()
+        refreshToolbar()
     }
 
-    fun hideClipboard() {
-        clipPanel.visibility = View.GONE
-        keyRows.visibility = View.VISIBLE
-        clipPanel.removeAllViews()
-        clipButton.setImageDrawable(icon(R.drawable.ic_clipboard, R.color.suggestion_text))
+    fun hidePanel() {
+        panel.visibility = View.GONE
+        keyboardView.visibility = View.VISIBLE
+        panel.removeAllViews()
+        openPanel = null
+        refreshToolbar()
+    }
+
+    private fun refreshToolbar() {
+        clipButton.setImageDrawable(icon(R.drawable.ic_clipboard,
+            if (openPanel == Panel.CLIPBOARD) R.color.accent else R.color.suggestion_text))
+        snippetButton.setImageDrawable(icon(R.drawable.ic_snippet,
+            if (openPanel == Panel.SNIPPETS) R.color.accent else R.color.suggestion_text))
     }
 
     private fun clipRow(item: ClipboardHistory.Item): View {
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = pressable(color(R.color.key_background), color(R.color.key_background_pressed))
-            setPadding(dp(10), dp(6), dp(4), dp(6))
-            setOnClickListener {
-                haptic(this)
-                listener.onClipPaste(item.text)
-            }
-        }
-        row.addView(TextView(context).apply {
-            text = item.text.trim()
-            setTextColor(color(R.color.key_text))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val row = listRow { listener.onClipPaste(item.text) }
+        row.addView(rowText(item.text.trim(), maxLines = 2), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(iconButton(if (item.pinned) R.drawable.ic_pin_on else R.drawable.ic_pin,
             if (item.pinned) R.string.clipboard_unpin else R.string.clipboard_pin, active = item.pinned) {
             listener.onClipPin(item.text, !item.pinned)
         })
         row.addView(iconButton(R.drawable.ic_close, R.string.clipboard_delete, active = false) { listener.onClipDelete(item.text) })
-        return row.also {
-            it.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                .apply { setMargins(dp(4), dp(3), dp(4), dp(3)) }
+        return row
+    }
+
+    private fun snippetRow(snippet: SnippetStore.Snippet): View {
+        val row = listRow { listener.onSnippetPicked(snippet.trigger) }
+        row.setPadding(dp(10), dp(9), dp(10), dp(9))
+        row.addView(TextView(context).apply {
+            text = snippet.trigger
+            setTextColor(color(R.color.accent))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(typeface, Typeface.BOLD)
+            minWidth = dp(64)
+        })
+        row.addView(rowText(snippet.text.replace('\n', ' ').trim(), maxLines = 2),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        return row
+    }
+
+    private fun listRow(onClick: () -> Unit) = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = pressable(color(R.color.key_background), color(R.color.key_background_pressed))
+        setPadding(dp(10), dp(6), dp(4), dp(6))
+        setOnClickListener {
+            haptic(this)
+            onClick()
+        }
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            .apply { setMargins(dp(4), dp(3), dp(4), dp(3)) }
+    }
+
+    private fun rowText(text: String, maxLines: Int) = TextView(context).apply {
+        this.text = text
+        setTextColor(color(R.color.key_text))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        this.maxLines = maxLines
+        ellipsize = TextUtils.TruncateAt.END
+    }
+
+    // ------------------------------------------------------------------ suggestions & keys
+
+    /** Shows up to three suggestions; [highlight] marks the one space will insert. */
+    fun setSuggestions(words: List<String>, highlight: Int, chip: Chip? = null) {
+        suggestionViews.forEachIndexed { i, tv ->
+            val w = words.getOrNull(i)
+            tv.text = w ?: ""
+            tv.isEnabled = w != null
+            val isChip = chip != null && i == 0 && w != null
+            tv.setTypeface(null, if (i == highlight || isChip) Typeface.BOLD else Typeface.NORMAL)
+            tv.setTextColor(color(if (i == highlight || isChip) R.color.accent else R.color.suggestion_text))
+            val chipIcon = when (chip) {
+                Chip.CLIPBOARD -> R.drawable.ic_clipboard
+                Chip.SNIPPET -> R.drawable.ic_snippet
+                null -> 0
+            }
+            tv.setCompoundDrawablesRelative(if (isChip) icon(chipIcon, R.color.accent, 18) else null, null, null, null)
+            tv.compoundDrawablePadding = if (isChip) dp(6) else 0
+            tv.setPadding(if (isChip) dp(10) else 0, 0, if (isChip) dp(6) else 0, 0)
+        }
+    }
+
+    fun setKeys(rows: List<KeyRow>, shift: ShiftState, enterLabel: String) {
+        keyboardView.setKeys(rows, shift, enterLabel)
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private fun toolbarButton(iconRes: Int, description: Int, onClick: () -> Unit) = ImageView(context).apply {
+        setImageDrawable(icon(iconRes, R.color.suggestion_text))
+        scaleType = ImageView.ScaleType.CENTER
+        contentDescription = context.getString(description)
+        background = pressable(android.graphics.Color.TRANSPARENT, color(R.color.key_background_pressed))
+        setOnClickListener {
+            haptic(this)
+            onClick()
         }
     }
 
@@ -206,27 +304,6 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         setTextColor(color(R.color.suggestion_text))
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         setPadding(dp(16), dp(32), dp(16), dp(16))
-    }
-
-    /** Shows up to three suggestions; [highlight] marks the one space will insert. */
-    fun setSuggestions(words: List<String>, highlight: Int, clipChip: Boolean = false) {
-        if (!isClipboardOpen) clipButton.setImageDrawable(icon(R.drawable.ic_clipboard, R.color.suggestion_text))
-        suggestionViews.forEachIndexed { i, tv ->
-            val w = words.getOrNull(i)
-            tv.text = w ?: ""
-            tv.isEnabled = w != null
-            tv.setTypeface(null, if (i == highlight) Typeface.BOLD else Typeface.NORMAL)
-            tv.setTextColor(color(if (i == highlight) R.color.accent else R.color.suggestion_text))
-            // A just-copied text is shown with a clipboard icon in the first slot.
-            val chip = clipChip && i == 0 && w != null
-            tv.setCompoundDrawablesRelative(if (chip) icon(R.drawable.ic_clipboard, R.color.accent, 18) else null, null, null, null)
-            tv.compoundDrawablePadding = if (chip) dp(6) else 0
-            tv.setPadding(if (chip) dp(10) else 0, 0, if (chip) dp(6) else 0, 0)
-        }
-    }
-
-    fun setKeys(rows: List<KeyRow>, shift: ShiftState, enterLabel: String) {
-        keyboardView.setKeys(rows, shift, enterLabel)
     }
 
     private fun haptic(v: View) {
