@@ -67,6 +67,17 @@ class KeyPreviewOverlay(context: Context) : View(context) {
 
     override fun onTouchEvent(event: android.view.MotionEvent?): Boolean = false
 
+    /**
+     * Take no space of our own: report 0 unless the parent gives an exact size.
+     * Otherwise "match parent" inside the input window (which has no fixed height)
+     * is measured as the whole screen and the keyboard grows to full height.
+     * FrameLayout re-measures us with the keyboard's real size afterwards.
+     */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        fun size(spec: Int) = if (MeasureSpec.getMode(spec) == MeasureSpec.EXACTLY) MeasureSpec.getSize(spec) else 0
+        setMeasuredDimension(size(widthMeasureSpec), size(heightMeasureSpec))
+    }
+
     override fun onDraw(canvas: Canvas) {
         val l = label ?: return
         val r = dp(10f)

@@ -63,6 +63,8 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
     val root: FrameLayout = FrameLayout(context).apply {
         addView(content)
         addView(preview, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        layoutParams = android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     private val suggestionBar = LinearLayout(context).apply {
@@ -105,7 +107,8 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         content.addView(suggestionBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
         val body = FrameLayout(context)
         body.addView(keyboardView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
-        body.addView(panel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        // The panel's height is set to the keys' height when it opens (see showPanel).
+        body.addView(panel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 0))
         content.addView(body)
     }
 
@@ -159,6 +162,8 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         panel.addView(ScrollView(context).apply { addView(list) },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
+        // Exactly the keys' height, so opening a panel never resizes the keyboard.
+        panel.layoutParams = panel.layoutParams.apply { height = keyboardView.height }
         keyboardView.visibility = View.INVISIBLE
         panel.visibility = View.VISIBLE
         openPanel = which
