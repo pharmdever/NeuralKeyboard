@@ -1,0 +1,127 @@
+package com.neuralkeyboard.core
+
+import java.io.File
+import java.io.StringReader
+import java.io.StringWriter
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class SuggestionEngineTest {
+
+    private val dictDir = File("../app/src/main/assets/dict")
+
+    private fun load(language: Language): Pair<LanguageModel, SuggestionEngine> {
+        val model = LanguageModel()
+        File(dictDir, "${language.code}_words.tsv").reader().use(model::loadWords)
+        File(dictDir, "${language.code}_bigrams.tsv").reader().use(model::loadBigrams)
+        return model to SuggestionEngine(model, KeyProximity.forLanguage(language))
+    }
+
+    private val en = load(Language.ENGLISH)
+    private val th = load(Language.THAI)
+
+    private fun words(r: SuggestionEngine.Result) = r.suggestions.map { it.word }
+
+    @Test
+    fun `swapped letters are auto-corrected`() {
+        assertEquals("the", en.second.suggest("teh").autoCorrection)
+    }
+
+    @Test
+    fun `neighbouring key typo is auto-corrected`() {
+        // 'r' is next to 'e' on QWERTY
+        assertEquals("hello", en.second.suggest("hrllo").autoCorrection)
+    }
+
+    @Test
+    fun `missing apostrophe is fixed`() {
+        assertEquals("don't", en.second.suggest("dont").autoCorrection)
+    }
+
+    @Test
+    fun `known words are never auto-corrected`() {
+        assertNull(en.second.suggest("the").autoCorrection)
+        assertNull(en.second.suggest("work").autoCorrection)
+    }
+
+    @Test
+    fun `lone i becomes capital I`() {
+        assertEquals("I", en.second.suggest("i").autoCorrection)
+    }
+
+    @Test
+    fun `prefix is completed and capitalisation is kept`() {
+        val r = en.second.suggest("Hel")
+        assertTrue("Hello" in words(r) || "Help" in words(r), "got ${words(r)}")
+        assertNull(r.autoCorrection, "must not auto-correct a valid prefix")
+    }
+
+    @Test
+    fun `typed text is always offered when unknown`() {
+        val r = en.second.suggest("xqzt")
+        assertEquals("xqzt", words(r).first())
+    }
+
+    @Test
+    fun `next word is predicted from the previous word`() {
+        assertEquals("you", en.second.suggest("", previousWord = "thank").suggestions.first().word)
+        assertEquals("ครับ", th.second.suggest("", previousWord = "ขอบคุณ").suggestions.first().word)
+    }
+
+    @Test
+    fun `previous word reranks completions`() {
+        val r = en.second.suggest("y", previousWord = "thank")
+        assertEquals("you", words(r).first { it != "y" })
+    }
+
+    @Test
+    fun `learned words stop being corrected and get suggested`() {
+        val (model, engine) = load(Language.ENGLISH)
+        assertTrue(engine.suggest("claude").autoCorrection != "claude")
+        repeat(3) { model.learn("claude") }
+        assertNull(engine.suggest("claude").autoCorrection)
+        assertTrue("claude" in words(engine.suggest("cla")))
+    }
+
+    @Test
+    fun `learned bigrams drive prediction`() {
+        val (model, engine) = load(Language.ENGLISH)
+        repeat(10) { model.learn("pizza", previous = "eat") }
+        assertEquals("pizza", engine.predictNext("eat").first().word)
+    }
+
+    @Test
+    fun `user data survives save and load`() {
+        val (model, _) = load(Language.ENGLISH)
+        model.learn("kotlin", previous = "love")
+        val out = StringWriter().also(model::saveUserData).toString()
+
+        val (fresh, engine) = load(Language.ENGLISH)
+        fresh.loadUserData(StringReader(out))
+        assertTrue(fresh.isKnown("kotlin"))
+        assertTrue("kotlin" in engine.predictNext("love").map { it.word })
+    }
+
+    @Test
+    fun `thai prefix completion`() {
+        assertTrue("สวัสดี" in words(th.second.suggest("สวัส")))
+    }
+
+    @Test
+    fun `thai missing tone mark is corrected`() {
+        assertEquals("ไม่เป็นไร", th.second.suggest("ไมเป็นไร").autoCorrection)
+    }
+
+    @Test
+    fun `thai wrong consonant is corrected`() {
+        assertEquals("ขอบคุณ", th.second.suggest("ขอบคุน").autoCorrection)
+    }
+
+    @Test
+    fun `thai run-on text is split at word boundary`() {
+        assertEquals("สวัสดี" to "ค", th.second.splitFinishedWord("สวัสดีค"))
+        assertNull(th.second.splitFinishedWord("สวัส"))
+    }
+}

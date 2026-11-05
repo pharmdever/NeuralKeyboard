@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="setup_title">ตั้งค่า NeuralKeyboard</string>
+    <string name="setup_intro">แป้นพิมพ์อัจฉริยะที่เติมคำให้อัตโนมัติ แก้คำพิมพ์ผิด เดาคำถัดไป และเรียนรู้สไตล์การพิมพ์ของคุณ ข้อมูลทั้งหมดอยู่ในเครื่องเท่านั้น</string>
+    <string name="step_enable">1. เปิดใช้งาน NeuralKeyboard</string>
+    <string name="step_choose">2. เปลี่ยนมาใช้ NeuralKeyboard</string>
+    <string name="status_enabled">✓ เปิดใช้งานแล้ว</string>
+    <string name="status_selected">✓ กำลังใช้งานเป็นแป้นพิมพ์หลัก</string>
+    <string name="prefs_title">การตั้งค่า</string>
+    <string name="pref_autocorrect">แก้คำผิดอัตโนมัติเมื่อกดเว้นวรรค</string>
+    <string name="pref_auto_cap">ขึ้นต้นประโยคด้วยตัวพิมพ์ใหญ่ (อังกฤษ)</string>
+    <string name="pref_double_space">กดเว้นวรรคสองครั้งเพื่อใส่จุด</string>
+    <string name="pref_haptics">สั่นเมื่อกดปุ่ม</string>
+    <string name="pref_learning">เรียนรู้คำใหม่จากการพิมพ์ของฉัน</string>
+    <string name="clear_learned">ล้างคำที่เรียนรู้</string>
+    <string name="cleared">ล้างคำที่เรียนรู้แล้ว</string>
+    <string name="try_it">ลองพิมพ์ที่นี่…</string>
+</resources>

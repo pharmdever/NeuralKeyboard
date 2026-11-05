@@ -1,1 +1,55 @@
 # NeuralKeyboard
+
+แป้นพิมพ์อัจฉริยะสำหรับ Android (ภาษาไทย + อังกฤษ) ที่ประมวลผลทั้งหมดบนเครื่อง ไม่ส่งข้อมูลการพิมพ์ออกไปไหน
+
+A smart on-device Android keyboard (Thai + English).
+
+## ความสามารถ / Features
+
+| ฟีเจอร์ | ตัวอย่าง |
+|---|---|
+| เติมคำอัตโนมัติ (completion) | `hel` → hello, help · `สวัส` → สวัสดี |
+| แก้คำผิดเมื่อกดเว้นวรรค (auto-correct) | `teh` → the · `dont` → don't · `ขอบคุน` → ขอบคุณ |
+| รู้ตำแหน่งปุ่ม — กดโดนปุ่มข้างเคียงถือว่าผิดน้อยกว่า | `hrllo` → hello (r อยู่ติดกับ e) |
+| ลืมใส่วรรณยุกต์ (ไทย) | `ไมเป็นไร` → ไม่เป็นไร |
+| เดาคำถัดไป (next-word prediction) | หลัง `thank` → you · หลัง `ขอบคุณ` → ครับ |
+| ตัดคำไทยอัตโนมัติ (ภาษาไทยไม่มีเว้นวรรค) | `สวัสดีค` → commit "สวัสดี", พิมพ์ต่อ "ค" → แนะนำ "ครับ" |
+| เรียนรู้คำใหม่และคู่คำที่ใช้บ่อยของผู้ใช้ | ชื่อคน/ศัพท์เฉพาะจะไม่ถูกแก้อีก และขึ้นในคำแนะนำ |
+| กด ⌫ ทันทีหลังแก้คำผิด = ยกเลิกการแก้ | `teh␣` → `the ` → ⌫ → `teh` |
+| ขึ้นต้นประโยคตัวใหญ่, เว้นวรรคสองครั้งใส่จุด, ย้ายเว้นวรรคก่อน `.` `,` | |
+| ความเป็นส่วนตัว | ไม่เดา/ไม่เรียนรู้ในช่องรหัสผ่าน, อีเมล/URL, หรือแอปที่ขอโหมด incognito |
+
+## โครงสร้าง / Structure
+
+```
+core/   Pure Kotlin prediction engine (unit-tested on the JVM)
+  Trie.kt              frequency trie + keyboard-aware Damerau-Levenshtein search
+  KeyProximity.kt      edit costs from physical key positions, Thai tone/vowel rules
+  LanguageModel.kt     unigram + bigram model, on-device learning, save/load
+  SuggestionEngine.kt  completion, correction, prediction, auto-correct decision, Thai word split
+  Language.kt          English QWERTY + Thai Kedmanee layouts
+app/    Android app
+  SmartKeyboardService.kt  InputMethodService: composing text, autocorrect, undo, learning
+  KeyboardUi.kt            keys + suggestion strip (built in code, light/dark theme)
+  SettingsActivity.kt      setup wizard + preferences + test box
+  assets/dict/             starter word-frequency and bigram lists (en, th)
+```
+
+## Build & ติดตั้ง
+
+```bash
+./gradlew :core:test            # ทดสอบระบบเดาคำ (ไม่ต้องมี Android SDK)
+./gradlew :app:assembleDebug    # ต้องมี Android SDK (ANDROID_HOME หรือ local.properties)
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+หรือดาวน์โหลด APK ที่ GitHub Actions สร้างให้ (แท็บ **Actions** → run ล่าสุด → artifact `NeuralKeyboard-debug-apk`).
+
+จากนั้นเปิดแอป **NeuralKeyboard** → กด "เปิดใช้งาน" → "เปลี่ยนมาใช้" แล้วลองพิมพ์ในช่องทดสอบ
+
+## ขั้นต่อไปที่แนะนำ / Next steps
+
+1. **พจนานุกรมใหญ่ขึ้น** – ตอนนี้มีคำเริ่มต้นไม่กี่ร้อยคำ ใส่รายการคำ+ความถี่จากคลังข้อความ (เช่น 50k คำ) ลงใน `app/src/main/assets/dict/*_words.tsv` ได้ทันที
+2. **Neural model บนเครื่อง** – เพิ่มโมเดลภาษาขนาดเล็ก (TensorFlow Lite / ONNX) เพื่อจัดอันดับคำแนะนำจากบริบททั้งประโยค โดยใช้ `SuggestionEngine` เป็นตัวสร้างคำผู้สมัคร
+3. **Glide typing (ลากนิ้ว)**, emoji, ปุ่มกดค้างเพื่อพิมพ์ตัวเลข/สัญลักษณ์
+4. **ตัดคำไทยด้วยพจนานุกรม (maximal matching)** แทนการตัดแบบคำยาวที่สุดตอนพิมพ์

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NeuralKeyboard</string>
+    <string name="ime_name">NeuralKeyboard</string>
+    <string name="subtype_en">English</string>
+    <string name="subtype_th">ไทย (Thai)</string>
+
+    <string name="setup_title">Set up NeuralKeyboard</string>
+    <string name="setup_intro">A smart keyboard that completes words, fixes typos, predicts your next word and learns how you type. Everything stays on your phone.</string>
+    <string name="step_enable">1. Enable NeuralKeyboard</string>
+    <string name="step_choose">2. Switch to NeuralKeyboard</string>
+    <string name="status_enabled">✓ Enabled</string>
+    <string name="status_selected">✓ Selected as current keyboard</string>
+    <string name="prefs_title">Preferences</string>
+    <string name="pref_autocorrect">Auto-correct when pressing space</string>
+    <string name="pref_auto_cap">Auto-capitalise sentences</string>
+    <string name="pref_double_space">Double-space types a full stop</string>
+    <string name="pref_haptics">Vibrate on key press</string>
+    <string name="pref_learning">Learn new words from my typing</string>
+    <string name="clear_learned">Clear learned words</string>
+    <string name="cleared">Learned words cleared</string>
+    <string name="try_it">Try it here…</string>
+</resources>
