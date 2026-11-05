@@ -24,6 +24,12 @@ class LanguageModel {
     /** Fixed replacements such as "im" -> "i'm" or "thx" -> "thanks". */
     private val shortcuts = HashMap<String, String>()
 
+    /**
+     * Words that may be suggested but never inserted by auto-correct (drug names):
+     * silently swapping one drug for a look-alike one would be dangerous.
+     */
+    private val protectedWords = HashSet<String>()
+
     /** Load "word<TAB>freq" lines (whitespace also accepted). Lines starting with # are ignored. */
     fun loadWords(reader: Reader) {
         reader.buffered().forEachDataLine { parts ->
@@ -55,6 +61,32 @@ class LanguageModel {
     }
 
     fun shortcut(typed: String): String? = shortcuts[normalize(typed)]
+
+    /**
+     * Load specialist terms ("term<TAB>freq", the term may have several words, e.g.
+     * "insulin glargine"). Each word becomes known; consecutive words become a bigram
+     * so the second word is predicted. Words that were not already in the general
+     * dictionary are protected from auto-correct (see [isProtected]).
+     */
+    fun loadTerms(reader: Reader, bigramFreq: Int = TERM_BIGRAM_FREQ) {
+        reader.buffered().useLines { lines ->
+            for (raw in lines) {
+                if (raw.isBlank() || raw.startsWith("#")) continue
+                val tab = raw.indexOf('\t')
+                val term = normalize(if (tab >= 0) raw.substring(0, tab) else raw)
+                val freq = (if (tab >= 0) raw.substring(tab + 1).trim().toIntOrNull() else null) ?: 1
+                val tokens = term.split(' ', '-', '/', ',').filter { t -> t.length >= 3 && t.all { it.isLetter() || isMark(it) } }
+                for (t in tokens) {
+                    val existing = words.freq(t)
+                    if (existing == 0) protectedWords.add(t)
+                    if (existing < freq) words.add(t, freq - existing)
+                }
+                for ((a, b) in tokens.zipWithNext()) addBigram(bigrams, a, b, bigramFreq)
+            }
+        }
+    }
+
+    fun isProtected(word: String): Boolean = normalize(word) in protectedWords
 
     fun frequency(word: String): Int = words.freq(normalize(word))
 
@@ -152,6 +184,13 @@ class LanguageModel {
     companion object {
         /** How much one use of a word counts, relative to bundled frequencies. */
         const val LEARN_WEIGHT = 400
+
+        private const val TERM_BIGRAM_FREQ = 300
+
+        private fun isMark(c: Char): Boolean {
+            val type = Character.getType(c)
+            return type == Character.NON_SPACING_MARK.toInt() || type == Character.COMBINING_SPACING_MARK.toInt()
+        }
 
         /** Personal word pairs weigh this many times more than bundled ones when predicting. */
         const val USER_BIGRAM_BOOST = 2

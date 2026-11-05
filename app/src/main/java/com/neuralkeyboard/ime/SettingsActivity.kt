@@ -59,6 +59,8 @@ class SettingsActivity : Activity() {
         column.addView(toggle(R.string.pref_double_space, prefs.doubleSpacePeriod) { prefs.doubleSpacePeriod = it })
         column.addView(toggle(R.string.pref_haptics, prefs.haptics) { prefs.haptics = it })
         column.addView(toggle(R.string.pref_learning, prefs.learning) { prefs.learning = it })
+        column.addView(toggle(R.string.pref_clipboard, prefs.clipboardHistory) { prefs.clipboardHistory = it })
+        column.addView(toggle(R.string.pref_medical, prefs.medicalTerms) { prefs.medicalTerms = it })
         column.addView(button(R.string.clear_learned) {
             prefs.clearLearnedWords()
             Toast.makeText(this, R.string.cleared, Toast.LENGTH_SHORT).show()

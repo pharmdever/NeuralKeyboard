@@ -1,0 +1,48 @@
+# International (INN/BAN) names commonly used in Thailand that DrugBank lists
+# under their US name, plus common combination names. One term per line.
+paracetamol
+salbutamol
+adrenaline
+noradrenaline
+glibenclamide
+ciclosporin
+co-amoxiclav
+co-trimoxazole
+chlorphenamine
+hyoscine
+hyoscine butylbromide
+pethidine
+phenoxymethylpenicillin
+amoxicillin clavulanate
+piperacillin tazobactam
+ampicillin sulbactam
+cefoperazone sulbactam
+frusemide
+lignocaine
+thiamazole
+levothyroxine
+sodium valproate
+valproic acid
+ferrous sulfate
+ferrous fumarate
+folic acid
+calcium carbonate
+potassium chloride
+sodium chloride
+sodium bicarbonate
+magnesium hydroxide
+aluminium hydroxide
+oral rehydration salts
+normal saline
+dextrose
+insulin aspart
+insulin lispro
+insulin glargine
+insulin detemir
+insulin degludec
+regular insulin
+nph insulin
+favipiravir
+molnupiravir
+nirmatrelvir ritonavir
+andrographis

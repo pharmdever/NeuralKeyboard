@@ -16,15 +16,26 @@ class Prefs(context: Context) {
     var doubleSpacePeriod by flag("double_space", true)
     var haptics by flag("haptics", true)
     var learning by flag("learning", true)
+    var clipboardHistory by flag("clipboard_history", true)
+
+    /** Drug-name vocabulary; changing it makes a running keyboard reload its dictionaries. */
+    var medicalTerms: Boolean
+        get() = raw.getBoolean("medical_terms", true)
+        set(value) {
+            raw.edit().putBoolean("medical_terms", value).putInt("reset_token", resetToken + 1).apply()
+        }
 
     var language: Language
         get() = Language.fromCode(raw.getString("language", null))
         set(value) = raw.edit().putString("language", value.code).apply()
 
-    /** Bumped when learned data is wiped so a running keyboard reloads. */
+    /** Bumped when dictionaries must be reloaded (learned data wiped, vocabulary changed). */
     val resetToken: Int get() = raw.getInt("reset_token", 0)
 
     fun userDataFile(language: Language) = File(app.filesDir, "user_${language.code}.tsv")
+
+    /** Only pinned clipboard items are stored on disk. */
+    val pinnedClipsFile: File get() = File(app.filesDir, "clipboard_pinned.tsv")
 
     fun clearLearnedWords() {
         Language.entries.forEach { userDataFile(it).delete() }

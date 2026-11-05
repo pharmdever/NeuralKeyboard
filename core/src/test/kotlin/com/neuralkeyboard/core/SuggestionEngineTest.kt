@@ -17,6 +17,7 @@ class SuggestionEngineTest {
         File(dictDir, "${language.code}_words.tsv").reader().use(model::loadWords)
         File(dictDir, "${language.code}_bigrams.tsv").reader().use(model::loadBigrams)
         File(dictDir, "${language.code}_shortcuts.tsv").takeIf { it.exists() }?.reader()?.use(model::loadShortcuts)
+        File(dictDir, "${language.code}_medical.tsv").takeIf { it.exists() }?.reader()?.use { model.loadTerms(it) }
         return model to SuggestionEngine(model, KeyProximity.forLanguage(language))
     }
 
@@ -163,5 +164,42 @@ class SuggestionEngineTest {
         assertEquals("ประเทศไทย", th.second.suggest("ประเทสไทย").autoCorrection) // ส vs ศ
         assertEquals("โรงพยาบาล", th.second.suggest("โรงพยาบาน").autoCorrection) // น vs ล
         assertTrue("มหาวิทยาลัย" in words(th.second.suggest("มหาวิทยาลั")))
+    }
+
+    @Test
+    fun `drug names are completed`() {
+        assertTrue("cisplatin" in words(en.second.suggest("cispl")), "got ${words(en.second.suggest("cispl"))}")
+        assertTrue("pembrolizumab" in words(en.second.suggest("pembro")))
+        assertTrue("paracetamol" in words(en.second.suggest("paraceta")))
+        assertTrue("พาราเซตามอล" in words(th.second.suggest("พาราเซ")))
+    }
+
+    @Test
+    fun `misspelled drug names are suggested but never auto-inserted`() {
+        val r = en.second.suggest("vincristin")
+        assertTrue("vincristine" in words(r), "got ${words(r)}")
+        assertNull(r.autoCorrection)
+        val r2 = en.second.suggest("metformim")
+        assertTrue("metformin" in words(r2), "got ${words(r2)}")
+        assertNull(r2.autoCorrection)
+    }
+
+    @Test
+    fun `a drug name is never auto-corrected into another drug`() {
+        // hydroxyzine and hydralazine are a known look-alike pair
+        assertNull(en.second.suggest("hydroxyzine").autoCorrection)
+        assertNull(en.second.suggest("hydralazine").autoCorrection)
+        assertNull(en.second.suggest("hydroxyzene").autoCorrection)
+    }
+
+    @Test
+    fun `multi-word drug names are predicted word by word`() {
+        assertTrue("glargine" in en.second.predictNext("insulin", 10).map { it.word })
+    }
+
+    @Test
+    fun `everyday typos are still auto-corrected with the medical list loaded`() {
+        assertEquals("because", en.second.suggest("becuase").autoCorrection)
+        assertEquals("the", en.second.suggest("teh").autoCorrection)
     }
 }

@@ -117,6 +117,12 @@ class SuggestionEngine(
     private fun pickAutoCorrection(key: String, ranked: List<Suggestion>): String? {
         if (key.length < 2) return null
         val best = ranked.firstOrNull { it.kind == Kind.CORRECTION } ?: return null
+        // Never auto-insert a protected (drug) name, and do not "fix" the word into
+        // something else when a protected name is about as likely: just suggest.
+        if (model.isProtected(best.word)) return null
+        if (ranked.any { it.kind == Kind.CORRECTION && model.isProtected(it.word) && it.score > best.score - PROTECTED_MARGIN }) {
+            return null
+        }
         // The user may still be typing a longer word ("hel" -> "hello"). Then only
         // correct when the fix is very cheap (missing apostrophe, tone mark...) or
         // far more likely than any completion ("teh" -> "the" despite "tehran").
@@ -145,6 +151,7 @@ class SuggestionEngine(
         private const val COMPLETION_POOL = 12
         private const val PREFIX_SAFE_COST = 0.6
         private const val PREFIX_MARGIN = 2.0
+        private const val PROTECTED_MARGIN = 1.0
         private const val USER_WORD_BONUS = 1.5
         private const val EXACT_BONUS = 2.0
         private const val COMPLETION_LENGTH_PENALTY = 0.25

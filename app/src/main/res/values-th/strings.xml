@@ -15,4 +15,14 @@
     <string name="clear_learned">ล้างคำที่เรียนรู้</string>
     <string name="cleared">ล้างคำที่เรียนรู้แล้ว</string>
     <string name="try_it">ลองพิมพ์ที่นี่…</string>
+    <string name="pref_clipboard">เก็บประวัติคลิปบอร์ด (รายการที่ไม่ปักหมุดเก็บไว้ 1 ชั่วโมง)</string>
+    <string name="pref_medical">คำศัพท์การแพทย์ (ชื่อยา)</string>
+    <string name="clipboard_title">คลิปบอร์ด</string>
+    <string name="clipboard_empty">คัดลอกข้อความแล้วจะแสดงที่นี่\nแตะเพื่อวาง กด 📌 เพื่อเก็บไว้ถาวร</string>
+    <string name="clipboard_off">ประวัติคลิปบอร์ดถูกปิดอยู่ในการตั้งค่า NeuralKeyboard</string>
+    <string name="clipboard_clear">ล้าง</string>
+    <string name="clipboard_pin">ปักหมุด</string>
+    <string name="clipboard_unpin">เลิกปักหมุด</string>
+    <string name="clipboard_delete">ลบ</string>
+    <string name="keyboard_back">← แป้นพิมพ์</string>
 </resources>

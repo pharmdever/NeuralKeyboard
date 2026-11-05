@@ -1,6 +1,9 @@
 package com.neuralkeyboard.ime
 
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.inputmethodservice.InputMethodService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -10,6 +13,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import com.neuralkeyboard.core.ClipboardHistory
 import com.neuralkeyboard.core.KeyProximity
 import com.neuralkeyboard.core.Language
 import com.neuralkeyboard.core.LanguageModel
@@ -51,6 +55,14 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     private var autoSpaced = false
     private var unsavedLearns = 0
 
+    private val clipboard = ClipboardHistory()
+    private var clipboardManager: ClipboardManager? = null
+    /** Text of the "just copied" chip, or null when it is not shown. */
+    private var clipChip: String? = null
+    /** Wall-clock time of the last key press or paste. */
+    private var lastTypedAt = 0L
+    private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { onClipboardChanged() }
+
     // What the current text field allows.
     private var predictionOn = true
     private var autocorrectOn = true
@@ -67,9 +79,17 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         language = prefs.language
         loadedResetToken = prefs.resetToken
         ensureLoaded(language)
+
+        if (prefs.pinnedClipsFile.exists()) {
+            runCatching { clipboard.loadPinned(prefs.pinnedClipsFile.readText()) }
+        }
+        clipboardManager = getSystemService(ClipboardManager::class.java)?.also {
+            it.addPrimaryClipChangedListener(clipListener)
+        }
     }
 
     override fun onDestroy() {
+        clipboardManager?.removePrimaryClipChangedListener(clipListener)
         saveUserData()
         io.shutdown()
         super.onDestroy()
@@ -112,6 +132,12 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         autoCapOn = predictionOn && !isTechnical && prefs.autoCapitalize
 
         ui?.hapticsEnabled = prefs.haptics
+        ui?.hideClipboard()
+        if (!prefs.clipboardHistory) {
+            clipboard.clearAll()
+            prefs.pinnedClipsFile.delete()
+        }
+        clipChip = null
         shift = ShiftState.OFF
         updateAutoShift()
         renderKeys()
@@ -145,6 +171,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     override fun onKey(key: Key) {
         val ic = currentInputConnection ?: return
         if (key.type != Key.Type.DELETE) pendingUndo = null
+        if (key.type in TYPING_KEYS) lastTypedAt = System.currentTimeMillis()
         val wasAutoSpaced = autoSpaced
         autoSpaced = false
         when (key.type) {
@@ -295,7 +322,15 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     override fun onSuggestionPicked(index: Int) {
         val ic = currentInputConnection ?: return
-        val picked = result.suggestions.getOrNull(index)?.word ?: return
+        val chip = clipChip
+        if (chip != null) {
+            if (index == 0) {
+                paste(ic, chip)
+                return
+            }
+        }
+        val offset = if (chip != null) 1 else 0
+        val picked = result.suggestions.getOrNull(index - offset)?.word ?: return
         val separator = if (language.spaceAfterWord) " " else ""
         ic.commitText(picked + separator, 1)
         autoSpaced = separator.isNotEmpty()
@@ -306,6 +341,83 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         updateAutoShift()
         renderKeys()
         updateSuggestions()
+    }
+
+    // ---------------------------------------------------------------- clipboard
+
+    private fun onClipboardChanged() {
+        if (!prefs.clipboardHistory) return
+        val clip = runCatching { clipboardManager?.primaryClip }.getOrNull() ?: return
+        if (clip.itemCount == 0) return
+        // Apps (password managers...) mark secrets as sensitive: never keep those.
+        val extras = clip.description?.extras
+        val sensitive = extras?.getBoolean(EXTRA_IS_SENSITIVE) == true ||
+            (Build.VERSION.SDK_INT >= 33 && extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE) == true)
+        if (sensitive) return
+        val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return
+        clipboard.add(text, System.currentTimeMillis()) ?: return
+        val keyboard = ui ?: return
+        if (keyboard.isClipboardOpen) refreshClipboardPanel() else updateSuggestions()
+    }
+
+    override fun onClipboardButton() {
+        val keyboard = ui ?: return
+        if (keyboard.isClipboardOpen) {
+            keyboard.hideClipboard()
+            updateSuggestions()
+        } else {
+            currentInputConnection?.let { commitComposing(it, autocorrect = false) }
+            refreshClipboardPanel()
+        }
+    }
+
+    override fun onClipPaste(text: String) {
+        val ic = currentInputConnection ?: return
+        paste(ic, text)
+    }
+
+    override fun onClipPin(text: String, pinned: Boolean) {
+        clipboard.setPinned(text, pinned)
+        savePinnedClips()
+        refreshClipboardPanel()
+    }
+
+    override fun onClipDelete(text: String) {
+        clipboard.remove(text)
+        savePinnedClips()
+        refreshClipboardPanel()
+    }
+
+    override fun onClipClear() {
+        clipboard.clearUnpinned()
+        refreshClipboardPanel()
+    }
+
+    private fun refreshClipboardPanel() {
+        clipboard.prune(System.currentTimeMillis())
+        ui?.showClipboard(clipboard.items, prefs.clipboardHistory)
+    }
+
+    private fun paste(ic: InputConnection, text: String) {
+        commitComposing(ic, autocorrect = false)
+        ic.commitText(text, 1)
+        previousWord = null
+        pendingUndo = null
+        clipChip = null
+        lastTypedAt = System.currentTimeMillis()
+        ui?.hideClipboard()
+        updateAutoShift()
+        renderKeys()
+        updateSuggestions()
+    }
+
+    private fun savePinnedClips() {
+        val data = clipboard.serializePinned()
+        val file = prefs.pinnedClipsFile
+        io.execute {
+            runCatching { if (data.isEmpty()) file.delete() else file.writeText(data) }
+                .onFailure { Log.e(TAG, "Failed to save pinned clips", it) }
+        }
     }
 
     /** Commits the composing word, auto-correcting it if allowed, then appends [separator]. */
@@ -334,11 +446,21 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
             return
         }
         result = engine.suggest(composing.toString(), previousWord ?: wordBeforeCursor(), KeyboardUi.SLOTS)
-        val words = result.suggestions.map { it.word }
-        val highlight = when {
+        var words = result.suggestions.map { it.word }
+        var highlight = when {
             !autocorrectOn -> -1
             result.autoCorrection != null -> words.indexOf(result.autoCorrection)
             else -> -1
+        }
+        // Something was just copied: offer it as a one-tap paste in the first slot.
+        clipChip = if (composing.isEmpty() && prefs.clipboardHistory) {
+            clipboard.recent(System.currentTimeMillis(), CLIP_CHIP_WINDOW_MS)
+                ?.takeIf { it.time > lastTypedAt } // hide once the user has typed since copying
+                ?.text
+        } else null
+        clipChip?.let { text ->
+            words = listOf("📋 " + text.trim().replace(Regex("\\s+"), " ")) + words.take(KeyboardUi.SLOTS - 1)
+            highlight = if (highlight >= 0) highlight + 1 else -1
         }
         keyboard.setSuggestions(words, highlight)
     }
@@ -388,7 +510,11 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
             try {
                 assets.open("dict/${lang.code}_words.tsv").reader().use(model::loadWords)
                 assets.open("dict/${lang.code}_bigrams.tsv").reader().use(model::loadBigrams)
-                if ("${lang.code}_shortcuts.tsv" in assets.list("dict").orEmpty()) {
+                val files = assets.list("dict").orEmpty()
+                if (prefs.medicalTerms && "${lang.code}_medical.tsv" in files) {
+                    assets.open("dict/${lang.code}_medical.tsv").reader().use { model.loadTerms(it) }
+                }
+                if ("${lang.code}_shortcuts.tsv" in files) {
                     assets.open("dict/${lang.code}_shortcuts.tsv").reader().use(model::loadShortcuts)
                 }
                 val user = prefs.userDataFile(lang)
@@ -444,6 +570,10 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     companion object {
         private const val TAG = "NeuralKeyboard"
         private const val SAVE_EVERY = 20
+        private const val CLIP_CHIP_WINDOW_MS = 60_000L
+        private val TYPING_KEYS = setOf(Key.Type.CHAR, Key.Type.SPACE, Key.Type.DELETE, Key.Type.ENTER)
+        /** Same key as ClipDescription.EXTRA_IS_SENSITIVE, which many apps set on older Android too. */
+        private const val EXTRA_IS_SENSITIVE = "android.content.extra.IS_SENSITIVE"
         private const val DOUBLE_TAP_MS = 350L
         private const val DOUBLE_SPACE_MS = 600L
         private val SENTENCE_PUNCTUATION = setOf(".", "!", "?")
