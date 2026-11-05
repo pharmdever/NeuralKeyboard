@@ -124,4 +124,19 @@ class SuggestionEngineTest {
         assertEquals("สวัสดี" to "ค", th.second.splitFinishedWord("สวัสดีค"))
         assertNull(th.second.splitFinishedWord("สวัส"))
     }
+
+    @Test
+    fun `thai dictionary covers everyday vocabulary`() {
+        assertTrue(th.first.words.size > 20000, "only ${th.first.words.size} Thai words")
+        for (w in listOf("ประเทศไทย", "โรงพยาบาล", "มหาวิทยาลัย", "คอมพิวเตอร์", "อินเทอร์เน็ต", "ครับ", "ค่ะ")) {
+            assertTrue(th.first.isKnown(w), "missing $w")
+        }
+    }
+
+    @Test
+    fun `thai misspellings of longer words are corrected`() {
+        assertEquals("ประเทศไทย", th.second.suggest("ประเทสไทย").autoCorrection) // ส vs ศ
+        assertEquals("โรงพยาบาล", th.second.suggest("โรงพยาบาน").autoCorrection) // น vs ล
+        assertTrue("มหาวิทยาลัย" in words(th.second.suggest("มหาวิทยาลั")))
+    }
 }

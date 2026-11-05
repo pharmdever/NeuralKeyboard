@@ -32,8 +32,18 @@ app/    Android app
   SmartKeyboardService.kt  InputMethodService: composing text, autocorrect, undo, learning
   KeyboardUi.kt            keys + suggestion strip (built in code, light/dark theme)
   SettingsActivity.kt      setup wizard + preferences + test box
-  assets/dict/             starter word-frequency and bigram lists (en, th)
+  assets/dict/             word-frequency and bigram lists (en, th)
+tools/
+  build_thai_dict.py       regenerates th_words.tsv from the Thai National Corpus
+  th_curated.tsv           hand-picked chat words (ครับ, ค่ะ, จ้า, ...) merged into it
 ```
+
+## พจนานุกรม / Dictionaries
+
+- **ไทย: ~23,000 คำ** พร้อมความถี่จาก Thai National Corpus (ผ่าน [PyThaiNLP corpus](https://github.com/PyThaiNLP/pythainlp-corpus), สัญญาอนุญาต CC0-1.0)
+  กรองคำขยะออก (คำที่ตัดผิด, วรรณยุกต์ซ้ำ, ขึ้นต้นด้วยสระ) และรวมคำภาษาพูดจาก `tools/th_curated.tsv`
+  สร้างใหม่ได้ด้วย `python3 tools/build_thai_dict.py tnc_freq.txt words_th.txt` (ดูวิธีโหลดไฟล์ในสคริปต์)
+- อังกฤษ: ~480 คำเริ่มต้น
 
 ## Build & ติดตั้ง
 
@@ -49,7 +59,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ## ขั้นต่อไปที่แนะนำ / Next steps
 
-1. **พจนานุกรมใหญ่ขึ้น** – ตอนนี้มีคำเริ่มต้นไม่กี่ร้อยคำ ใส่รายการคำ+ความถี่จากคลังข้อความ (เช่น 50k คำ) ลงใน `app/src/main/assets/dict/*_words.tsv` ได้ทันที
+1. **พจนานุกรมอังกฤษใหญ่ขึ้น** และ **bigram ภาษาไทยจากคลังข้อความ** (ตอนนี้ bigram ยังเป็นชุดที่เขียนเอง)
 2. **Neural model บนเครื่อง** – เพิ่มโมเดลภาษาขนาดเล็ก (TensorFlow Lite / ONNX) เพื่อจัดอันดับคำแนะนำจากบริบททั้งประโยค โดยใช้ `SuggestionEngine` เป็นตัวสร้างคำผู้สมัคร
 3. **Glide typing (ลากนิ้ว)**, emoji, ปุ่มกดค้างเพื่อพิมพ์ตัวเลข/สัญลักษณ์
 4. **ตัดคำไทยด้วยพจนานุกรม (maximal matching)** แทนการตัดแบบคำยาวที่สุดตอนพิมพ์
