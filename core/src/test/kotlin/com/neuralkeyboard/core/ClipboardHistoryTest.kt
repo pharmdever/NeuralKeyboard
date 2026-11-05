@@ -46,12 +46,28 @@ class ClipboardHistoryTest {
     }
 
     @Test
-    fun `only pinned items are persisted, multi-line text survives`() {
+    fun `whole history survives save and load, multi-line text included`() {
         val h = ClipboardHistory()
-        h.add("line1\nline2\twith tab \\ slash", 5); h.setPinned("line1\nline2\twith tab \\ slash", true)
-        h.add("secret", 6)
-        val restored = ClipboardHistory().apply { loadPinned(h.serializePinned()) }
-        assertEquals(listOf("line1\nline2\twith tab \\ slash"), restored.items.map { it.text })
-        assertTrue(restored.items.single().pinned)
+        val tricky = "line1\nline2\twith tab \\ slash"
+        h.add(tricky, 5); h.setPinned(tricky, true)
+        h.add("plain", 6)
+        val restored = ClipboardHistory().apply { load(h.serialize()) }
+        assertEquals(listOf("plain", tricky), restored.items.map { it.text })
+        assertEquals(listOf(false, true), restored.items.map { it.pinned })
+    }
+
+    @Test
+    fun `items are kept forever by default`() {
+        val h = ClipboardHistory()
+        h.add("old", 0)
+        h.prune(now = 365L * 24 * 3600 * 1000)
+        assertEquals(listOf("old"), h.items.map { it.text })
+    }
+
+    @Test
+    fun `legacy pinned file is still readable`() {
+        val h = ClipboardHistory().apply { loadLegacyPinned("5\tkept\\nline\n") }
+        assertEquals("kept\nline", h.items.single().text)
+        assertTrue(h.items.single().pinned)
     }
 }

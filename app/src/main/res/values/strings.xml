@@ -20,14 +20,21 @@
     <string name="clear_learned">Clear learned words</string>
     <string name="cleared">Learned words cleared</string>
     <string name="try_it">Try it here…</string>
-    <string name="pref_clipboard">Keep clipboard history (unpinned items are kept for 1 hour)</string>
+    <string name="pref_clipboard">Keep clipboard history</string>
+    <string name="pref_learn_clipboard">Learn new words from copied text</string>
+    <string name="pref_clip_retention">Keep unpinned clipboard items for</string>
+    <string name="retention_forever">Until I delete them</string>
+    <string name="retention_1h">1 hour</string>
+    <string name="retention_1d">1 day</string>
+    <string name="retention_7d">7 days</string>
+    <string name="retention_30d">30 days</string>
     <string name="pref_medical">Medical vocabulary (drug names)</string>
     <string name="clipboard_title">Clipboard</string>
-    <string name="clipboard_empty">Copy some text and it will appear here.\nTap an item to paste it, 📌 to keep it.</string>
+    <string name="clipboard_empty">Copy some text and it will appear here.\nTap an item to paste it, 📌 to pin it to the top.</string>
     <string name="clipboard_off">Clipboard history is turned off in NeuralKeyboard settings.</string>
     <string name="clipboard_clear">Clear</string>
     <string name="clipboard_pin">Pin</string>
     <string name="clipboard_unpin">Unpin</string>
     <string name="clipboard_delete">Delete</string>
-    <string name="keyboard_back">← ABC</string>
+    <string name="keyboard_back">ABC</string>
 </resources>

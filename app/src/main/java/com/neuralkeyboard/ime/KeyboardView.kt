@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.util.SparseArray
@@ -30,7 +31,7 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
 
     private var rows: List<KeyRow> = emptyList()
     private var shift = ShiftState.OFF
-    private var enterLabel = "⏎"
+    private var enterLabel = EnterAction.ENTER
 
     private class KeyBox(val key: Key, val rect: RectF)
 
@@ -57,6 +58,8 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
     private val labelPaint = text(R.color.key_text, 22f)
     private val smallLabelPaint = text(R.color.key_text, 15f)
     private val hintPaint = text(R.color.suggestion_text, 10.5f).apply { alpha = 170 }
+    private val iconSize = dp(23f)
+    private val icons = HashMap<Int, Drawable>()
 
     /** Updates the keys. Cheap when nothing changed (e.g. most key presses). */
     fun setKeys(rows: List<KeyRow>, shift: ShiftState, enterLabel: String) {
@@ -119,12 +122,32 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
         }
         canvas.drawRoundRect(r, radius, radius, bg)
 
-        val label = when (key.type) {
-            Key.Type.SHIFT -> if (shift == ShiftState.LOCKED) "⇪" else "⇧"
-            Key.Type.DELETE -> "⌫"
-            Key.Type.ENTER -> enterLabel
-            else -> key.label
+        val icon = when (key.type) {
+            Key.Type.SHIFT -> when (shift) {
+                ShiftState.OFF -> R.drawable.ic_key_shift
+                ShiftState.ONCE -> R.drawable.ic_key_shift_on
+                ShiftState.LOCKED -> R.drawable.ic_key_caps_lock
+            }
+            Key.Type.DELETE -> R.drawable.ic_key_backspace
+            Key.Type.LANGUAGE -> R.drawable.ic_key_globe
+            Key.Type.ENTER -> when (enterLabel) {
+                EnterAction.SEARCH -> R.drawable.ic_key_search
+                EnterAction.SEND -> R.drawable.ic_key_send
+                EnterAction.NEXT, EnterAction.GO -> R.drawable.ic_key_next
+                EnterAction.DONE -> R.drawable.ic_key_done
+                else -> R.drawable.ic_key_enter
+            }
+            else -> 0
         }
+        if (icon != 0) {
+            val d = icons.getOrPut(icon) { context.getDrawable(icon)!!.mutate() }
+            d.setTint(if (shiftActive) Color.WHITE else labelPaint.color)
+            val half = iconSize / 2
+            d.setBounds((r.centerX() - half).toInt(), (r.centerY() - half).toInt(), (r.centerX() + half).toInt(), (r.centerY() + half).toInt())
+            d.draw(canvas)
+            return
+        }
+        val label = key.label
         val paint = if (key.type == Key.Type.CHAR && label.length <= 2) labelPaint else smallLabelPaint
         val color = paint.color
         if (shiftActive) paint.color = Color.WHITE

@@ -17,6 +17,15 @@ class Prefs(context: Context) {
     var haptics by flag("haptics", true)
     var learning by flag("learning", true)
     var clipboardHistory by flag("clipboard_history", true)
+    var learnFromClipboard by flag("learn_from_clipboard", true)
+
+    /** How long unpinned clipboard items are kept, in hours; 0 = until deleted. */
+    var clipboardRetentionHours: Int
+        get() = raw.getInt("clipboard_retention_hours", 0)
+        set(value) = raw.edit().putInt("clipboard_retention_hours", value).apply()
+
+    val clipboardTtlMillis: Long?
+        get() = clipboardRetentionHours.takeIf { it > 0 }?.let { it * 3_600_000L }
 
     /** Drug-name vocabulary; changing it makes a running keyboard reload its dictionaries. */
     var medicalTerms: Boolean
@@ -34,8 +43,11 @@ class Prefs(context: Context) {
 
     fun userDataFile(language: Language) = File(app.filesDir, "user_${language.code}.tsv")
 
-    /** Only pinned clipboard items are stored on disk. */
-    val pinnedClipsFile: File get() = File(app.filesDir, "clipboard_pinned.tsv")
+    /** Clipboard history, kept in the app's private storage. */
+    val clipboardFile: File get() = File(app.filesDir, "clipboard_history.tsv")
+
+    /** Older versions stored only pinned items here; read once, then deleted. */
+    val legacyPinnedClipsFile: File get() = File(app.filesDir, "clipboard_pinned.tsv")
 
     fun clearLearnedWords() {
         Language.entries.forEach { userDataFile(it).delete() }

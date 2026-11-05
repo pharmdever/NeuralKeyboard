@@ -22,6 +22,16 @@ enum class KeyboardMode { LETTERS, SYMBOLS, SYMBOLS_MORE }
 
 enum class ShiftState { OFF, ONCE, LOCKED }
 
+/** What the Enter key does in the current field; picks its icon. */
+object EnterAction {
+    const val ENTER = "enter"
+    const val SEARCH = "search"
+    const val SEND = "send"
+    const val NEXT = "next"
+    const val GO = "go"
+    const val DONE = "done"
+}
+
 /** Key arrangement modelled on Samsung Keyboard. */
 object KeyboardLayouts {
 
@@ -100,7 +110,7 @@ object KeyboardLayouts {
 
     private fun bottomRow(language: Language, modeKey: Key): List<Key> = listOf(
         modeKey,
-        Key(Key.Type.LANGUAGE, "🌐"),
+        Key(Key.Type.LANGUAGE, "Language"),
         Key(Key.Type.CHAR, ","),
         Key(Key.Type.SPACE, language.label, " ", weight = 4f),
         Key(Key.Type.CHAR, "."),

@@ -6,7 +6,10 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.inputmethod.InputMethodManager
+import android.view.View
 import android.widget.Button
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -60,6 +63,9 @@ class SettingsActivity : Activity() {
         column.addView(toggle(R.string.pref_haptics, prefs.haptics) { prefs.haptics = it })
         column.addView(toggle(R.string.pref_learning, prefs.learning) { prefs.learning = it })
         column.addView(toggle(R.string.pref_clipboard, prefs.clipboardHistory) { prefs.clipboardHistory = it })
+        column.addView(toggle(R.string.pref_learn_clipboard, prefs.learnFromClipboard) { prefs.learnFromClipboard = it })
+        column.addView(text(R.string.pref_clip_retention, 15f))
+        column.addView(retentionChoice())
         column.addView(toggle(R.string.pref_medical, prefs.medicalTerms) { prefs.medicalTerms = it })
         column.addView(button(R.string.clear_learned) {
             prefs.clearLearnedWords()
@@ -86,6 +92,24 @@ class SettingsActivity : Activity() {
         val selected = current?.startsWith("$packageName/") == true
         enableStatus.visibility = if (enabled) TextView.VISIBLE else TextView.GONE
         selectStatus.visibility = if (selected) TextView.VISIBLE else TextView.GONE
+    }
+
+    private fun retentionChoice() = RadioGroup(this).apply {
+        val options = listOf(
+            0 to R.string.retention_forever,
+            1 to R.string.retention_1h,
+            24 to R.string.retention_1d,
+            24 * 7 to R.string.retention_7d,
+            24 * 30 to R.string.retention_30d,
+        )
+        for ((hours, label) in options) {
+            addView(RadioButton(this@SettingsActivity).apply {
+                id = View.generateViewId()
+                setText(label)
+                isChecked = prefs.clipboardRetentionHours == hours
+                setOnCheckedChangeListener { _, checked -> if (checked) prefs.clipboardRetentionHours = hours }
+            })
+        }
     }
 
     private fun text(res: Int, size: Float) = TextView(this).apply {

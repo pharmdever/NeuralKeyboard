@@ -18,6 +18,7 @@ import com.neuralkeyboard.core.KeyProximity
 import com.neuralkeyboard.core.Language
 import com.neuralkeyboard.core.LanguageModel
 import com.neuralkeyboard.core.SuggestionEngine
+import com.neuralkeyboard.core.TextHarvester
 import java.util.EnumMap
 import java.util.concurrent.Executors
 
@@ -85,9 +86,16 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         loadedResetToken = prefs.resetToken
         ensureLoaded(language)
 
-        if (prefs.pinnedClipsFile.exists()) {
-            runCatching { clipboard.loadPinned(prefs.pinnedClipsFile.readText()) }
-        }
+        clipboard.ttlMillis = prefs.clipboardTtlMillis
+        runCatching {
+            if (prefs.clipboardFile.exists()) clipboard.load(prefs.clipboardFile.readText())
+            val legacy = prefs.legacyPinnedClipsFile
+            if (legacy.exists()) {
+                clipboard.loadLegacyPinned(legacy.readText())
+                saveClipboard()
+                legacy.delete()
+            }
+        }.onFailure { Log.e(TAG, "Failed to load clipboard history", it) }
         clipboardManager = getSystemService(ClipboardManager::class.java)?.also {
             it.addPrimaryClipChangedListener(clipListener)
         }
@@ -139,9 +147,10 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
         ui?.hapticsEnabled = prefs.haptics
         ui?.hideClipboard()
+        clipboard.ttlMillis = prefs.clipboardTtlMillis
         if (!prefs.clipboardHistory) {
             clipboard.clearAll()
-            prefs.pinnedClipsFile.delete()
+            prefs.clipboardFile.delete()
         }
         clipChip = null
         shift = ShiftState.OFF
@@ -363,6 +372,8 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         if (sensitive) return
         val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return
         clipboard.add(text, System.currentTimeMillis()) ?: return
+        saveClipboard()
+        if (prefs.learnFromClipboard && prefs.learning) learnFromCopiedText(text)
         val keyboard = ui ?: return
         if (keyboard.isClipboardOpen) refreshClipboardPanel() else updateSuggestions()
     }
@@ -385,13 +396,13 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     override fun onClipPin(text: String, pinned: Boolean) {
         clipboard.setPinned(text, pinned)
-        savePinnedClips()
+        saveClipboard()
         refreshClipboardPanel()
     }
 
     override fun onClipDelete(text: String) {
         clipboard.remove(text)
-        savePinnedClips()
+        saveClipboard()
         refreshClipboardPanel()
     }
 
@@ -418,13 +429,50 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         updateSuggestions()
     }
 
-    private fun savePinnedClips() {
-        val data = clipboard.serializePinned()
-        val file = prefs.pinnedClipsFile
+    private fun saveClipboard() {
+        val data = clipboard.serialize()
+        val file = prefs.clipboardFile
         io.execute {
-            runCatching { if (data.isEmpty()) file.delete() else file.writeText(data) }
-                .onFailure { Log.e(TAG, "Failed to save pinned clips", it) }
+            runCatching {
+                if (data.isEmpty()) {
+                    file.delete()
+                } else {
+                    val tmp = java.io.File(file.path + ".tmp")
+                    tmp.writeText(data)
+                    tmp.renameTo(file)
+                }
+            }.onFailure { Log.e(TAG, "Failed to save clipboard history", it) }
         }
+    }
+
+    /** Words from copied text queued until that language's dictionary has loaded. */
+    private val pendingClipWords = EnumMap<Language, MutableList<TextHarvester.Word>>(Language::class.java)
+
+    /**
+     * Learns words from copied text. English words are learned as typed words;
+     * Thai has no spaces, so a run is only reinforced when it is already a known word.
+     */
+    private fun learnFromCopiedText(text: String) {
+        for ((lang, words) in TextHarvester.words(text).groupBy { it.language }) {
+            val model = models[lang]
+            if (model == null) {
+                pendingClipWords.getOrPut(lang) { ArrayList() }.addAll(words)
+                ensureLoaded(lang)
+                continue
+            }
+            learnHarvested(model, words)
+        }
+    }
+
+    private fun learnHarvested(model: LanguageModel, words: List<TextHarvester.Word>) {
+        synchronized(model) {
+            for (w in words) {
+                if (w.language == Language.THAI && !model.isKnown(w.text)) continue
+                model.learn(w.text, w.previous)
+            }
+        }
+        unsavedLearns += words.size
+        saveUserData()
     }
 
     /** Commits the composing word, auto-correcting it if allowed, then appends [separator]. */
@@ -498,10 +546,10 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
                 ?.text
         } else null
         clipChip?.let { text ->
-            words = listOf("📋 " + text.trim().replace(Regex("\\s+"), " ")) + words.take(KeyboardUi.SLOTS - 1)
+            words = listOf(text.trim().replace(Regex("\\s+"), " ")) + words.take(KeyboardUi.SLOTS - 1)
             highlight = if (highlight >= 0) highlight + 1 else -1
         }
-        keyboard.setSuggestions(words, highlight)
+        keyboard.setSuggestions(words, highlight, clipChip = clipChip != null)
     }
 
     /** Last whole word before the cursor, used for prediction after the cursor moves. */
@@ -528,15 +576,15 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     }
 
     private fun enterLabel(): String {
-        val info = currentInputEditorInfo ?: return "⏎"
-        if (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) return "⏎"
+        val info = currentInputEditorInfo ?: return EnterAction.ENTER
+        if (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) return EnterAction.ENTER
         return when (info.imeOptions and EditorInfo.IME_MASK_ACTION) {
-            EditorInfo.IME_ACTION_GO -> "Go"
-            EditorInfo.IME_ACTION_SEARCH -> "🔍"
-            EditorInfo.IME_ACTION_SEND -> "➤"
-            EditorInfo.IME_ACTION_NEXT -> "→"
-            EditorInfo.IME_ACTION_DONE -> "✓"
-            else -> "⏎"
+            EditorInfo.IME_ACTION_GO -> EnterAction.GO
+            EditorInfo.IME_ACTION_SEARCH -> EnterAction.SEARCH
+            EditorInfo.IME_ACTION_SEND -> EnterAction.SEND
+            EditorInfo.IME_ACTION_NEXT -> EnterAction.NEXT
+            EditorInfo.IME_ACTION_DONE -> EnterAction.DONE
+            else -> EnterAction.ENTER
         }
     }
 
@@ -566,6 +614,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
                 models[lang] = model
                 engines[lang] = engine
                 loading.remove(lang)
+                pendingClipWords.remove(lang)?.let { learnHarvested(model, it) }
                 if (lang == language) updateSuggestions()
             }
         }

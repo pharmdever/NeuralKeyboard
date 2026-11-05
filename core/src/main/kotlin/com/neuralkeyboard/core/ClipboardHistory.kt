@@ -1,15 +1,15 @@
 package com.neuralkeyboard.core
 
 /**
- * Recently copied texts, newest first.
+ * Copied texts, newest first.
  *
- * - Unpinned items expire after [ttlMillis] (copied text is often sensitive) and at
- *   most [maxUnpinned] of them are kept.
- * - Pinned items never expire; only they are persisted (see [serializePinned]).
+ * - Unpinned items expire after [ttlMillis] (null = keep until deleted) and at most
+ *   [maxUnpinned] of them are kept. Pinned items are never removed automatically.
+ * - The whole history can be saved and restored with [serialize] / [load].
  */
 class ClipboardHistory(
-    private val maxUnpinned: Int = 30,
-    private val ttlMillis: Long = 60 * 60 * 1000L,
+    private val maxUnpinned: Int = 100,
+    var ttlMillis: Long? = null,
     private val maxLength: Int = 10_000,
 ) {
 
@@ -49,7 +49,8 @@ class ClipboardHistory(
 
     /** Drops expired items and keeps at most [maxUnpinned] unpinned ones. */
     fun prune(now: Long) {
-        list.removeAll { !it.pinned && now - it.time > ttlMillis }
+        val ttl = ttlMillis
+        if (ttl != null) list.removeAll { !it.pinned && now - it.time > ttl }
         var unpinned = 0
         list.removeAll { !it.pinned && ++unpinned > maxUnpinned }
     }
@@ -58,11 +59,28 @@ class ClipboardHistory(
     fun recent(now: Long, windowMillis: Long): Item? =
         list.firstOrNull()?.takeIf { now - it.time <= windowMillis }
 
-    fun serializePinned(): String = buildString {
-        for (item in list) if (item.pinned) append(item.time).append('\t').append(escape(item.text)).append('\n')
+    /** One line per item: time, pinned flag (0/1), escaped text. */
+    fun serialize(): String = buildString {
+        for (item in list) {
+            append(item.time).append('\t').append(if (item.pinned) '1' else '0').append('\t')
+                .append(escape(item.text)).append('\n')
+        }
     }
 
-    fun loadPinned(data: String) {
+    /** Restores items written by [serialize], merging with what is already here. */
+    fun load(data: String) {
+        for (line in data.lineSequence()) {
+            val parts = line.split('\t', limit = 3)
+            if (parts.size != 3) continue
+            val time = parts[0].toLongOrNull() ?: continue
+            val text = unescape(parts[2])
+            if (text.isNotBlank() && list.none { it.text == text }) list.add(Item(text, time, parts[1] == "1"))
+        }
+        list.sortByDescending { it.time }
+    }
+
+    /** Reads the older format that stored only pinned items ("time<TAB>text"). */
+    fun loadLegacyPinned(data: String) {
         for (line in data.lineSequence()) {
             val tab = line.indexOf('\t')
             if (tab <= 0) continue
