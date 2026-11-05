@@ -1,17 +1,13 @@
 package com.neuralkeyboard.ime
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
-import android.os.Handler
-import android.os.Looper
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
-import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -36,6 +32,10 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
     }
 
     var hapticsEnabled = true
+        set(value) {
+            field = value
+            keyboardView.hapticsEnabled = value
+        }
 
     val root: LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -48,13 +48,13 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         gravity = Gravity.CENTER_VERTICAL
     }
     private val suggestionViews = ArrayList<TextView>()
-    private val keyRows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val keyboardView = KeyboardView(context) { listener.onKey(it) }
+    private val keyRows: View get() = keyboardView
     private val clipPanel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         visibility = View.GONE
     }
     private val clipButton = TextView(context)
-    private val handler = Handler(Looper.getMainLooper())
 
     val isClipboardOpen: Boolean get() = clipPanel.visibility == View.VISIBLE
 
@@ -91,7 +91,7 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         }
         root.addView(suggestionBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
         val body = FrameLayout(context)
-        body.addView(keyRows)
+        body.addView(keyboardView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
         body.addView(clipPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         root.addView(body)
     }
@@ -215,79 +215,8 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         }
     }
 
-    fun setKeys(rows: List<List<Key>>, shift: ShiftState, enterLabel: String) {
-        keyRows.removeAllViews()
-        for (row in rows) {
-            val line = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-            for (key in row) line.addView(keyView(key, shift, enterLabel), keyParams(key))
-            keyRows.addView(line, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(54)))
-        }
-    }
-
-    private fun keyParams(key: Key) = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, key.weight).apply {
-        setMargins(dp(2), dp(4), dp(2), dp(4))
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun keyView(key: Key, shift: ShiftState, enterLabel: String): View {
-        if (key.type == Key.Type.SPACER) return View(context)
-        val tv = TextView(context)
-        tv.gravity = Gravity.CENTER
-        tv.setTextColor(color(R.color.key_text))
-        tv.text = when (key.type) {
-            Key.Type.SHIFT -> if (shift == ShiftState.LOCKED) "⇪" else "⇧"
-            Key.Type.DELETE -> "⌫"
-            Key.Type.ENTER -> enterLabel
-            else -> key.label
-        }
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (key.type == Key.Type.CHAR) 22f else 16f)
-        tv.contentDescription = when (key.type) {
-            Key.Type.SHIFT -> "Shift"
-            Key.Type.DELETE -> "Delete"
-            Key.Type.ENTER -> "Enter"
-            Key.Type.SPACE -> "Space"
-            Key.Type.LANGUAGE -> "Switch language"
-            else -> key.label
-        }
-        val special = key.isSpecial
-        val active = key.type == Key.Type.SHIFT && shift != ShiftState.OFF
-        tv.background = when {
-            active -> pressable(color(R.color.accent), color(R.color.key_special_pressed))
-            special -> pressable(color(R.color.key_special_background), color(R.color.key_special_pressed))
-            else -> pressable(color(R.color.key_background), color(R.color.key_background_pressed))
-        }
-        if (active) tv.setTextColor(android.graphics.Color.WHITE)
-
-        if (key.type == Key.Type.DELETE) {
-            // Fire immediately, then auto-repeat while held.
-            val repeater = object : Runnable {
-                override fun run() {
-                    listener.onKey(key)
-                    handler.postDelayed(this, REPEAT_INTERVAL_MS)
-                }
-            }
-            tv.setOnTouchListener { v, ev ->
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        v.isPressed = true
-                        haptic(v)
-                        listener.onKey(key)
-                        handler.postDelayed(repeater, REPEAT_DELAY_MS)
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        v.isPressed = false
-                        handler.removeCallbacks(repeater)
-                    }
-                }
-                true
-            }
-        } else {
-            tv.setOnClickListener {
-                haptic(it)
-                listener.onKey(key)
-            }
-        }
-        return tv
+    fun setKeys(rows: List<KeyRow>, shift: ShiftState, enterLabel: String) {
+        keyboardView.setKeys(rows, shift, enterLabel)
     }
 
     private fun haptic(v: View) {
@@ -317,7 +246,5 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
 
     companion object {
         const val SLOTS = 3
-        private const val REPEAT_DELAY_MS = 400L
-        private const val REPEAT_INTERVAL_MS = 50L
     }
 }

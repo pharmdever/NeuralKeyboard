@@ -35,6 +35,11 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
+    /** Suggestions are computed here so typing never waits for them. */
+    private val predictor = Executors.newSingleThreadExecutor()
+    @Volatile private var latestRequest = 0
+    /** The (typed, previous word) that [result] was computed for. */
+    private var resultFor: Pair<String, String?>? = null
 
     private val models = EnumMap<Language, LanguageModel>(Language::class.java)
     private val engines = EnumMap<Language, SuggestionEngine>(Language::class.java)
@@ -92,6 +97,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         clipboardManager?.removePrimaryClipChangedListener(clipListener)
         saveUserData()
         io.shutdown()
+        predictor.shutdownNow()
         super.onDestroy()
     }
 
@@ -215,7 +221,8 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     /** Thai has no spaces: commit a finished word as soon as the next one starts. */
     private fun splitThaiWord(ic: InputConnection) {
         val engine = engines[language] ?: return
-        val (head, tail) = engine.splitFinishedWord(composing.toString()) ?: return
+        val model = models[language] ?: return
+        val (head, tail) = synchronized(model) { engine.splitFinishedWord(composing.toString()) } ?: return
         ic.commitText(head, 1)
         learn(head)
         previousWord = head
@@ -424,7 +431,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     private fun commitComposing(ic: InputConnection, autocorrect: Boolean, separator: String = "") {
         if (composing.isEmpty()) return
         val typed = composing.toString()
-        val fix = if (autocorrect && autocorrectOn) result.autoCorrection else null
+        val fix = if (autocorrect && autocorrectOn) freshResult(typed)?.autoCorrection else null
         val word = fix ?: typed
         ic.commitText(word + separator, 1)
         if (fix != null && fix != typed) {
@@ -437,15 +444,47 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     // ---------------------------------------------------------------- suggestions
 
+    /** Asks for new suggestions in the background; the newest request wins. */
     private fun updateSuggestions() {
         val engine = engines[language]
-        val keyboard = ui ?: return
-        if (!predictionOn || engine == null) {
+        val model = models[language]
+        if (ui == null) return
+        if (!predictionOn || engine == null || model == null) {
+            latestRequest++
             result = SuggestionEngine.Result.EMPTY
-            keyboard.setSuggestions(emptyList(), -1)
+            resultFor = null
+            showSuggestions()
             return
         }
-        result = engine.suggest(composing.toString(), previousWord ?: wordBeforeCursor(), KeyboardUi.SLOTS)
+        val typed = composing.toString()
+        val previous = previousWord ?: wordBeforeCursor()
+        val request = ++latestRequest
+        predictor.execute {
+            if (request != latestRequest) return@execute // the user already typed more
+            val r = synchronized(model) { engine.suggest(typed, previous, KeyboardUi.SLOTS) }
+            main.post {
+                if (request != latestRequest) return@post
+                result = r
+                resultFor = typed to previous
+                showSuggestions()
+            }
+        }
+    }
+
+    /**
+     * The result for exactly [typed], computing it now if the background one is not
+     * ready yet, so the space bar never auto-corrects from a stale result.
+     */
+    private fun freshResult(typed: String): SuggestionEngine.Result? {
+        if (resultFor?.first == typed) return result
+        val engine = engines[language] ?: return null
+        val model = models[language] ?: return null
+        val previous = previousWord ?: wordBeforeCursor()
+        return synchronized(model) { engine.suggest(typed, previous, KeyboardUi.SLOTS) }
+    }
+
+    private fun showSuggestions() {
+        val keyboard = ui ?: return
         var words = result.suggestions.map { it.word }
         var highlight = when {
             !autocorrectOn -> -1
@@ -453,7 +492,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
             else -> -1
         }
         // Something was just copied: offer it as a one-tap paste in the first slot.
-        clipChip = if (composing.isEmpty() && prefs.clipboardHistory) {
+        clipChip = if (predictionOn && composing.isEmpty() && prefs.clipboardHistory) {
             clipboard.recent(System.currentTimeMillis(), CLIP_CHIP_WINDOW_MS)
                 ?.takeIf { it.time > lastTypedAt } // hide once the user has typed since copying
                 ?.text
@@ -542,7 +581,8 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     private fun learn(word: String) {
         if (!learningOn) return
         val model = models[language] ?: return
-        model.learn(word, previousWord)
+        val previous = previousWord
+        synchronized(model) { model.learn(word, previous) }
         if (++unsavedLearns >= SAVE_EVERY) saveUserData()
     }
 
@@ -551,7 +591,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         unsavedLearns = 0
         // Snapshot on the main thread (where the model is mutated), write in the background.
         val snapshots = models.map { (lang, model) ->
-            lang to java.io.StringWriter().also(model::saveUserData).toString()
+            lang to synchronized(model) { java.io.StringWriter().also(model::saveUserData).toString() }
         }
         io.execute {
             for ((lang, data) in snapshots) {
