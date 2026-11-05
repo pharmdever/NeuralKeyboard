@@ -16,6 +16,7 @@ class SuggestionEngineTest {
         val model = LanguageModel()
         File(dictDir, "${language.code}_words.tsv").reader().use(model::loadWords)
         File(dictDir, "${language.code}_bigrams.tsv").reader().use(model::loadBigrams)
+        File(dictDir, "${language.code}_shortcuts.tsv").takeIf { it.exists() }?.reader()?.use(model::loadShortcuts)
         return model to SuggestionEngine(model, KeyProximity.forLanguage(language))
     }
 
@@ -82,7 +83,7 @@ class SuggestionEngineTest {
         assertTrue(engine.suggest("claude").autoCorrection != "claude")
         repeat(3) { model.learn("claude") }
         assertNull(engine.suggest("claude").autoCorrection)
-        assertTrue("claude" in words(engine.suggest("cla")))
+        assertTrue("claude" in words(engine.suggest("clau")), "got ${words(engine.suggest("clau"))}")
     }
 
     @Test
@@ -95,13 +96,37 @@ class SuggestionEngineTest {
     @Test
     fun `user data survives save and load`() {
         val (model, _) = load(Language.ENGLISH)
-        model.learn("kotlin", previous = "love")
+        repeat(3) { model.learn("kotlin", previous = "love") }
         val out = StringWriter().also(model::saveUserData).toString()
 
         val (fresh, engine) = load(Language.ENGLISH)
         fresh.loadUserData(StringReader(out))
         assertTrue(fresh.isKnown("kotlin"))
         assertTrue("kotlin" in engine.predictNext("love").map { it.word })
+    }
+
+    @Test
+    fun `english dictionary covers common misspellings`() {
+        assertTrue(en.first.words.size > 30000, "only ${en.first.words.size} English words")
+        val fixes = mapOf(
+            "recieve" to "receive", "definately" to "definitely", "seperate" to "separate",
+            "goverment" to "government", "tommorow" to "tomorrow", "becuase" to "because",
+            "freind" to "friend", "wierd" to "weird",
+        )
+        for ((typo, fix) in fixes) assertEquals(fix, en.second.suggest(typo).autoCorrection, typo)
+    }
+
+    @Test
+    fun `texting shortcuts expand`() {
+        assertEquals("I'm", en.second.suggest("im").autoCorrection)
+        assertEquals("thanks", en.second.suggest("thx").autoCorrection)
+        assertEquals("Please", en.second.suggest("Pls").autoCorrection)
+    }
+
+    @Test
+    fun `bundled bigrams predict common phrases`() {
+        assertEquals("morning", en.second.predictNext("good").first().word)
+        assertEquals("to", en.second.predictNext("going").first().word)
     }
 
     @Test

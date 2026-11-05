@@ -21,6 +21,9 @@ class LanguageModel {
     private val userWords = HashMap<String, Int>()
     private val userBigrams = HashMap<String, HashMap<String, Int>>()
 
+    /** Fixed replacements such as "im" -> "i'm" or "thx" -> "thanks". */
+    private val shortcuts = HashMap<String, String>()
+
     /** Load "word<TAB>freq" lines (whitespace also accepted). Lines starting with # are ignored. */
     fun loadWords(reader: Reader) {
         reader.buffered().forEachDataLine { parts ->
@@ -39,7 +42,24 @@ class LanguageModel {
         }
     }
 
+    /** Load "typed<TAB>replacement" lines. The replacement may contain spaces. */
+    fun loadShortcuts(reader: Reader) {
+        reader.buffered().useLines { lines ->
+            for (line in lines) {
+                if (line.isBlank() || line.startsWith("#")) continue
+                val tab = line.indexOf('\t')
+                if (tab <= 0) continue
+                shortcuts[normalize(line.substring(0, tab).trim())] = line.substring(tab + 1).trim()
+            }
+        }
+    }
+
+    fun shortcut(typed: String): String? = shortcuts[normalize(typed)]
+
     fun frequency(word: String): Int = words.freq(normalize(word))
+
+    /** How many times the user has committed [word] (0 for words never typed). */
+    fun userUses(word: String): Int = (userWords[normalize(word)] ?: 0) / LEARN_WEIGHT
 
     fun isKnown(word: String): Boolean = normalize(word) in words
 
@@ -51,14 +71,17 @@ class LanguageModel {
         return bigrams[normalize(previous)]?.get(normalize(word)) ?: 0
     }
 
-    /** Most likely words to follow [previous]. */
-    fun followers(previous: String, limit: Int): List<Pair<String, Int>> =
-        bigrams[normalize(previous)]
+    /** Most likely words to follow [previous]; the user's own habits count extra. */
+    fun followers(previous: String, limit: Int): List<Pair<String, Int>> {
+        val p = normalize(previous)
+        val user = userBigrams[p]
+        return bigrams[p]
             ?.entries
-            ?.sortedByDescending { it.value }
+            ?.map { (w, c) -> w to c + USER_BIGRAM_BOOST * (user?.get(w) ?: 0) }
+            ?.sortedByDescending { it.second }
             ?.take(limit)
-            ?.map { it.key to it.value }
             ?: emptyList()
+    }
 
     /**
      * Records that the user committed [word] (after [previous], if any).
@@ -128,7 +151,10 @@ class LanguageModel {
 
     companion object {
         /** How much one use of a word counts, relative to bundled frequencies. */
-        const val LEARN_WEIGHT = 40
+        const val LEARN_WEIGHT = 400
+
+        /** Personal word pairs weigh this many times more than bundled ones when predicting. */
+        const val USER_BIGRAM_BOOST = 2
 
         fun normalize(word: String): String = word.lowercase()
 

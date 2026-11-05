@@ -388,6 +388,9 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
             try {
                 assets.open("dict/${lang.code}_words.tsv").reader().use(model::loadWords)
                 assets.open("dict/${lang.code}_bigrams.tsv").reader().use(model::loadBigrams)
+                if ("${lang.code}_shortcuts.tsv" in assets.list("dict").orEmpty()) {
+                    assets.open("dict/${lang.code}_shortcuts.tsv").reader().use(model::loadShortcuts)
+                }
                 val user = prefs.userDataFile(lang)
                 if (user.exists()) user.reader().use(model::loadUserData)
             } catch (e: Exception) {

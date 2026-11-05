@@ -44,6 +44,9 @@ class SuggestionEngine(
             if (old == null || s.score > old.score) candidates[s.word] = s
         }
 
+        val shortcut = model.shortcut(key)
+        if (shortcut != null) offer(Suggestion(shortcut, Kind.CORRECTION, Double.MAX_VALUE / 2))
+
         val typedKnown = model.isKnown(key)
         if (typedKnown) {
             offer(Suggestion(key, Kind.TYPED, score(key, previousWord) + EXACT_BONUS))
@@ -64,13 +67,20 @@ class SuggestionEngine(
         }
 
         val ranked = candidates.values.sortedByDescending { it.score }.toMutableList()
-        val autoCorrection = if (typedKnown) null else pickAutoCorrection(key, ranked)
+        val autoCorrection = when {
+            shortcut != null -> shortcut
+            typedKnown -> null
+            else -> pickAutoCorrection(key, ranked)
+        }
 
         // Always let the user keep exactly what they typed.
         if (!typedKnown) ranked.add(0, Suggestion(key, Kind.TYPED, Double.NEGATIVE_INFINITY))
 
-        val out = ranked.take(limit).map { it.copy(word = matchCase(typed, it.word)) }
+        val out = ranked.take(limit).map {
+            if (it.word.contains(' ')) it else it.copy(word = matchCase(typed, it.word))
+        }
         val fix = when {
+            autoCorrection != null && autoCorrection.contains(' ') -> autoCorrection // "idk" -> "I don't know"
             autoCorrection != null -> matchCase(typed, autoCorrection)
             // "i" -> "I" and "i'm" -> "I'm"
             typedKnown && (key == "i" || key.startsWith("i'")) && typed[0] == 'i' -> matchCase(typed, key)
@@ -107,15 +117,19 @@ class SuggestionEngine(
     private fun pickAutoCorrection(key: String, ranked: List<Suggestion>): String? {
         if (key.length < 2) return null
         val best = ranked.firstOrNull { it.kind == Kind.CORRECTION } ?: return null
-        // The user may still be typing a longer word ("hel" -> "hello"): only allow
-        // very cheap fixes (missing apostrophe, tone mark...) while completions exist.
+        // The user may still be typing a longer word ("hel" -> "hello"). Then only
+        // correct when the fix is very cheap (missing apostrophe, tone mark...) or
+        // far more likely than any completion ("teh" -> "the" despite "tehran").
         val bestCompletion = ranked.firstOrNull { it.kind == Kind.COMPLETION }
-        if (bestCompletion != null && best.editCost > PREFIX_SAFE_COST) return null
+        if (bestCompletion != null && best.editCost > PREFIX_SAFE_COST &&
+            best.score < bestCompletion.score + PREFIX_MARGIN
+        ) return null
         return best.word
     }
 
     private fun score(word: String, previous: String?): Double {
-        val unigram = ln(1.0 + model.frequency(word))
+        val uses = model.userUses(word)
+        val unigram = ln(1.0 + model.frequency(word)) + if (uses > 0) USER_WORD_BONUS * ln(1.0 + uses) else 0.0
         val bigram = model.bigramCount(previous, word)
         return unigram + if (bigram > 0) BIGRAM_WEIGHT * ln(1.0 + bigram) + BIGRAM_BONUS else 0.0
     }
@@ -130,6 +144,8 @@ class SuggestionEngine(
     companion object {
         private const val COMPLETION_POOL = 12
         private const val PREFIX_SAFE_COST = 0.6
+        private const val PREFIX_MARGIN = 2.0
+        private const val USER_WORD_BONUS = 1.5
         private const val EXACT_BONUS = 2.0
         private const val COMPLETION_LENGTH_PENALTY = 0.25
         private const val CORRECTION_PENALTY = 3.0

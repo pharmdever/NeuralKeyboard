@@ -35,6 +35,7 @@ app/    Android app
   assets/dict/             word-frequency and bigram lists (en, th)
 tools/
   build_thai_dict.py       regenerates th_words.tsv from the Thai National Corpus
+  build_english_dict.py    regenerates en_words.tsv / en_bigrams.tsv from SymSpell data
   th_curated.tsv           hand-picked chat words (ครับ, ค่ะ, จ้า, ...) merged into it
 ```
 
@@ -43,7 +44,10 @@ tools/
 - **ไทย: ~23,000 คำ** พร้อมความถี่จาก Thai National Corpus (ผ่าน [PyThaiNLP corpus](https://github.com/PyThaiNLP/pythainlp-corpus), สัญญาอนุญาต CC0-1.0)
   กรองคำขยะออก (คำที่ตัดผิด, วรรณยุกต์ซ้ำ, ขึ้นต้นด้วยสระ) และรวมคำภาษาพูดจาก `tools/th_curated.tsv`
   สร้างใหม่ได้ด้วย `python3 tools/build_thai_dict.py tnc_freq.txt words_th.txt` (ดูวิธีโหลดไฟล์ในสคริปต์)
-- อังกฤษ: ~480 คำเริ่มต้น
+- **อังกฤษ: ~40,000 คำ + ~72,000 คู่คำ** (สำหรับเดาคำถัดไป) จากข้อมูลความถี่ของ [SymSpell](https://github.com/wolfgarbe/SymSpell) (MIT)
+  ซึ่งสร้างจาก Google Books Ngram (CC BY 3.0) และ SCOWL รวมกับคำย่อ/คำที่ไม่มี apostrophe ใน `tools/en_curated*.tsv`
+  สร้างใหม่ได้ด้วย `python3 tools/build_english_dict.py ...` (ดูวิธีโหลดไฟล์ในสคริปต์)
+- **คำย่อ/shortcut** (`assets/dict/en_shortcuts.tsv`): `im` → I'm, `dont` → don't, `thx` → thanks, `pls` → please, `idk` → I don't know
 
 ## Build & ติดตั้ง
 
@@ -59,7 +63,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ## ขั้นต่อไปที่แนะนำ / Next steps
 
-1. **พจนานุกรมอังกฤษใหญ่ขึ้น** และ **bigram ภาษาไทยจากคลังข้อความ** (ตอนนี้ bigram ยังเป็นชุดที่เขียนเอง)
+1. **bigram ภาษาไทยจากคลังข้อความ** (ตอนนี้ bigram ภาษาไทยยังเป็นชุดที่เขียนเอง)
 2. **Neural model บนเครื่อง** – เพิ่มโมเดลภาษาขนาดเล็ก (TensorFlow Lite / ONNX) เพื่อจัดอันดับคำแนะนำจากบริบททั้งประโยค โดยใช้ `SuggestionEngine` เป็นตัวสร้างคำผู้สมัคร
 3. **Glide typing (ลากนิ้ว)**, emoji, ปุ่มกดค้างเพื่อพิมพ์ตัวเลข/สัญลักษณ์
 4. **ตัดคำไทยด้วยพจนานุกรม (maximal matching)** แทนการตัดแบบคำยาวที่สุดตอนพิมพ์
