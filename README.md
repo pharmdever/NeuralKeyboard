@@ -13,7 +13,7 @@ A smart on-device Android keyboard (Thai + English).
 | รู้ตำแหน่งปุ่ม — กดโดนปุ่มข้างเคียงถือว่าผิดน้อยกว่า | `hrllo` → hello (r อยู่ติดกับ e) |
 | ลืมใส่วรรณยุกต์ (ไทย) | `ไมเป็นไร` → ไม่เป็นไร |
 | เดาคำถัดไป (next-word prediction) | หลัง `thank` → you · หลัง `ขอบคุณ` → ครับ |
-| ตัดคำไทยอัตโนมัติ (ภาษาไทยไม่มีเว้นวรรค) | `สวัสดีค` → commit "สวัสดี", พิมพ์ต่อ "ค" → แนะนำ "ครับ" |
+| ตัดคำไทยอัตโนมัติ (ภาษาไทยไม่มีเว้นวรรค) | ตัดคำด้วยพจนานุกรมทั้งประโยค: `ฉันกินข้าวที่บ้าน` → ฉัน·กิน·ข้าว·ที่·บ้าน; คำที่พิมพ์ผิดจะคงไว้ทั้งก้อนเพื่อแก้ได้ |
 | เรียนรู้คำใหม่และคู่คำที่ใช้บ่อยของผู้ใช้ | ชื่อคน/ศัพท์เฉพาะจะไม่ถูกแก้อีก และขึ้นในคำแนะนำ |
 | กด ⌫ ทันทีหลังแก้คำผิด = ยกเลิกการแก้ | `teh␣` → `the ` → ⌫ → `teh` |
 | ขึ้นต้นประโยคตัวใหญ่, เว้นวรรคสองครั้งใส่จุด, ย้ายเว้นวรรคก่อน `.` `,` | |
@@ -46,16 +46,18 @@ tools/
 
 ## พจนานุกรม / Dictionaries
 
-- **ไทย: ~23,000 คำ** พร้อมความถี่จาก Thai National Corpus (ผ่าน [PyThaiNLP corpus](https://github.com/PyThaiNLP/pythainlp-corpus), สัญญาอนุญาต CC0-1.0)
+- **ไทย: ~23,000 คำ + ~48,000 คู่คำ** (สำหรับเดาคำถัดไป) จาก Thai National Corpus (ผ่าน [PyThaiNLP corpus](https://github.com/PyThaiNLP/pythainlp-corpus), สัญญาอนุญาต CC0-1.0)
   กรองคำขยะออก (คำที่ตัดผิด, วรรณยุกต์ซ้ำ, ขึ้นต้นด้วยสระ) และรวมคำภาษาพูดจาก `tools/th_curated.tsv`
-  สร้างใหม่ได้ด้วย `python3 tools/build_thai_dict.py tnc_freq.txt words_th.txt` (ดูวิธีโหลดไฟล์ในสคริปต์)
+  สร้างใหม่ได้ด้วย `python3 tools/build_thai_dict.py tnc_freq.txt words_th.txt 2gram.txt` (ดูวิธีโหลดไฟล์ในสคริปต์)
 - **อังกฤษ: ~40,000 คำ + ~72,000 คู่คำ** (สำหรับเดาคำถัดไป) จากข้อมูลความถี่ของ [SymSpell](https://github.com/wolfgarbe/SymSpell) (MIT)
   ซึ่งสร้างจาก Google Books Ngram (CC BY 3.0) และ SCOWL รวมกับคำย่อ/คำที่ไม่มี apostrophe ใน `tools/en_curated*.tsv`
   สร้างใหม่ได้ด้วย `python3 tools/build_english_dict.py ...` (ดูวิธีโหลดไฟล์ในสคริปต์)
-- **ชื่อยา (อังกฤษ): ~9,700 ชื่อยาสามัญ** จาก DrugBank Open Data (CC0-1.0) ผ่านแพ็กเกจ `drug-named-entity-recognition` (MIT)
+- **ชื่อยา (อังกฤษ): ~9,800 ชื่อ** — ชื่อยาสามัญจาก DrugBank Open Data (CC0-1.0) ผ่านแพ็กเกจ `drug-named-entity-recognition` (MIT) + ชื่อการค้าที่พบบ่อย ~130 ชื่อ (คัดด้วยมือ)
   สร้างใหม่ด้วย `tools/build_drug_list.py`, เพิ่มชื่อ INN/BAN ที่ใช้ในไทยได้ที่ `tools/en_medical_extra.txt`
-  ยังไม่มีชื่อการค้า (brand names)
-- **ชื่อยา (ไทย): ~110 ชื่อ** คัดด้วยมือใน `assets/dict/th_medical.tsv` (การสะกดทับศัพท์มีหลายแบบ เพิ่มได้)
+  ชื่อการค้าเพิ่มได้ที่ `tools/en_medical_extra.txt`
+- **ศัพท์การแพทย์ (อังกฤษ): ~3,400 คำ** (โรค กายวิภาค หัตถการ) จาก ICD-10-CM ของ CDC สหรัฐฯ (สาธารณสมบัติ) สร้างด้วย `tools/build_medical_words.py`
+- **ศัพท์การแพทย์ (ไทย): ~240 คำ** คัดด้วยมือใน `assets/dict/th_medwords.tsv` (โรค อาการ รูปแบบยา คำบนฉลากยา)
+- **ชื่อยา (ไทย): ~230 ชื่อ** คัดด้วยมือใน `assets/dict/th_medical.tsv` (การสะกดทับศัพท์มีหลายแบบ เพิ่มได้)
 - ปิด/เปิดคำศัพท์การแพทย์ได้ในหน้าตั้งค่า
 - **คำย่อ/shortcut** (`assets/dict/en_shortcuts.tsv`): `im` → I'm, `dont` → don't, `thx` → thanks, `pls` → please, `idk` → I don't know
 
@@ -71,6 +73,12 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 จากนั้นเปิดแอป **NeuralKeyboard** → กด "เปิดใช้งาน" → "เปลี่ยนมาใช้" แล้วลองพิมพ์ในช่องทดสอบ
 
+## ทดสอบอัตโนมัติ / Tests
+
+- `./gradlew :core:test` — เทสต์ระบบเดาคำ ตัดคำ คลิปบอร์ด ข้อความลัด
+- `python3 tools/ui_test.py <apk> <out_dir>` — ทดสอบบนเครื่องจำลอง/เครื่องจริงผ่าน adb: กดปุ่มจริง ตรวจการแก้คำ การพิมพ์ไทย
+  ความสูงแป้นคงที่ทุกหน้า และการ crash พร้อมภาพหน้าจอ; CI รันทุกครั้งที่ push (artifact `ui-test-screenshots-<เลขรอบ>`)
+
 ## อัปเดตแอป / Updating
 
 ทุกครั้งที่ push, GitHub Actions จะสร้าง APK ใหม่ (`NeuralKeyboard-debug-apk-<เลขรอบ>`) โดย
@@ -82,7 +90,6 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ## ขั้นต่อไปที่แนะนำ / Next steps
 
-1. **bigram ภาษาไทยจากคลังข้อความ** (ตอนนี้ bigram ภาษาไทยยังเป็นชุดที่เขียนเอง)
+1. **พิมพ์แบบลากนิ้ว (glide typing)**
 2. **Neural model บนเครื่อง** – เพิ่มโมเดลภาษาขนาดเล็ก (TensorFlow Lite / ONNX) เพื่อจัดอันดับคำแนะนำจากบริบททั้งประโยค โดยใช้ `SuggestionEngine` เป็นตัวสร้างคำผู้สมัคร
 3. **Glide typing (ลากนิ้ว)**, emoji, ปุ่มกดค้างเพื่อพิมพ์ตัวเลข/สัญลักษณ์
-4. **ตัดคำไทยด้วยพจนานุกรม (maximal matching)** แทนการตัดแบบคำยาวที่สุดตอนพิมพ์
