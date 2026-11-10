@@ -115,6 +115,19 @@ def ui_dump():
         return None
 
 
+def dismiss_anr():
+    """Taps "Wait" if an "app isn't responding" dialog is covering the screen."""
+    root = ui_dump()
+    if root is None:
+        return
+    for node in root.iter("node"):
+        if node.get("text") == "Wait" and node.get("class", "").endswith("Button"):
+            x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.get("bounds")))
+            adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+            time.sleep(2)
+            return
+
+
 def edit_text():
     root = ui_dump()
     if root is None:
@@ -139,16 +152,25 @@ def main(apk, out_dir):
 
     print(adb("install", "-r", apk, timeout=300))
     adb("shell", "settings", "put", "secure", "show_ime_with_hard_keyboard", "1")
-    for attempt in range(5):  # the system needs a moment to notice a new keyboard
-        enabled = adb("shell", "ime", "enable", IME)
-        selected = adb("shell", "ime", "set", IME)
-        print(enabled.strip(), "|", selected.strip())
-        if IME in adb("shell", "ime", "list", "-s"):
+    # A freshly booted emulator is busy: wait until the system has registered the
+    # new keyboard, dismissing any "app isn't responding" dialog on the way.
+    for attempt in range(40):
+        if IME in adb("shell", "ime", "list", "-a", "-s"):
             break
+        dismiss_anr()
         time.sleep(3)
+    print(adb("shell", "ime", "enable", IME).strip(), "|", adb("shell", "ime", "set", IME).strip())
+    time.sleep(2)
+    dismiss_anr()
     adb("logcat", "-c")
     adb("shell", "am", "start", "-n", f"{PKG}/.SettingsActivity")
     time.sleep(5)
+    dismiss_anr()
+    for _ in range(10):  # wait for the settings screen
+        if edit_text() is not None:
+            break
+        dismiss_anr()
+        time.sleep(3)
 
     size = re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size"))[-1]
     screen_h = int(size[1])
