@@ -96,7 +96,7 @@ class LanguageModel {
     fun isKnown(word: String): Boolean = normalize(word) in words
 
     /** True if some known word starts with [prefix]. */
-    fun hasCompletions(prefix: String): Boolean = words.complete(normalize(prefix), 1).isNotEmpty()
+    fun hasCompletions(prefix: String): Boolean = words.hasPrefix(normalize(prefix))
 
     fun bigramCount(previous: String?, word: String): Int {
         if (previous == null) return 0

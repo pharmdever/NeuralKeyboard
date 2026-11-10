@@ -202,4 +202,33 @@ class SuggestionEngineTest {
         assertEquals("because", en.second.suggest("becuase").autoCorrection)
         assertEquals("the", en.second.suggest("teh").autoCorrection)
     }
+
+    @Test
+    fun `thai sentence is segmented into words`() {
+        val r = th.second.segment("ฉันกินข้าวที่บ้าน")
+        assertEquals(listOf("ฉัน", "กิน", "ข้าว", "ที่", "บ้าน"), r.tokens)
+        assertTrue(r.clean)
+        assertEquals(listOf("วันนี้", "อากาศ", "ดี", "มาก"), th.second.segment("วันนี้อากาศดีมาก").tokens)
+    }
+
+    @Test
+    fun `thai words are split off as soon as the next word starts`() {
+        assertEquals(SuggestionEngine.Split(listOf("ไป"), "กิ"), th.second.splitWords("ไปกิ"))
+        // still one (possibly unfinished) word: nothing to commit
+        assertNull(th.second.splitWords("มาก"))
+        assertNull(th.second.splitWords("อากา"))
+        assertNull(th.second.splitWords("ประเทศไ"))
+    }
+
+    @Test
+    fun `thai text with a typo is kept whole so it can be corrected`() {
+        assertNull(th.second.splitWords("ขอบคุน"))
+        assertEquals("ขอบคุณ", th.second.suggest("ขอบคุน").autoCorrection)
+    }
+
+    @Test
+    fun `thai next word comes from corpus bigrams`() {
+        assertEquals("ข้าว", th.second.predictNext("กิน").first().word)
+        assertTrue(th.second.predictNext("โรง", 10).isNotEmpty())
+    }
 }

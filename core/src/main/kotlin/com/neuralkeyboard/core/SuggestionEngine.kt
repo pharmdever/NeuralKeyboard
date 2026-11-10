@@ -96,23 +96,41 @@ class SuggestionEngine(
         }
     }
 
+    private val segmenter = WordSegmenter(model.words)
+
+    /** Finished words and the part still being typed; see [splitWords]. */
+    data class Split(val finished: List<String>, val rest: String)
+
     /**
      * For languages written without spaces (Thai): when [typed] has run past the end
-     * of a word, split it into the finished word and the part the user is still
-     * typing, e.g. "สวัสดีค" -> ("สวัสดี", "ค"). Returns null when no split is needed.
+     * of a word, split off the finished words, e.g. "สวัสดีค" -> (["สวัสดี"], "ค").
+     * Returns null when nothing should be committed yet.
+     *
+     * Text that does not segment cleanly (a typo, a name) is left whole so that it
+     * can still be corrected as one word - unless it has grown past [maxRun].
      */
-    fun splitFinishedWord(typed: String): Pair<String, String>? {
-        val key = LanguageModel.normalize(typed)
-        if (key.length < 2 || model.hasCompletions(key)) return null
-        for (i in key.length - 1 downTo 1) {
-            val head = key.substring(0, i)
-            val tail = key.substring(i)
-            if (model.isKnown(head) && model.hasCompletions(tail)) {
-                return typed.substring(0, i) to typed.substring(i)
-            }
+    fun splitWords(typed: String, maxRun: Int = MAX_UNSPLIT_RUN): Split? {
+        if (typed.length < 2) return null
+        val result = segmenter.segment(LanguageModel.normalize(typed))
+        if (result.tokens.size < 2) return null
+        if (!result.clean && typed.length <= maxRun) return null
+        // A very rare word in the split ("ขอบ|คุน") is suspicious: if the whole text
+        // is one edit away from a much more common word ("ขอบคุณ"), keep it whole.
+        if (result.rarestFreq < RARE_WORD_FREQ && typed.length <= maxRun) {
+            val key = LanguageModel.normalize(typed)
+            val threshold = result.rarestFreq * 4
+            if (model.words.fuzzy(key, maxEditCost(key.length), costs).any { it.freq >= threshold }) return null
         }
-        return null
+        val rest = result.tokens.last()
+        return Split(result.tokens.dropLast(1), rest)
     }
+
+    /** [splitWords] with the finished words joined: ("สวัสดี", "ค"). */
+    fun splitFinishedWord(typed: String): Pair<String, String>? =
+        splitWords(typed)?.let { it.finished.joinToString("") to it.rest }
+
+    /** All words of a run of text (used to learn from copied Thai text). */
+    fun segment(text: String): WordSegmenter.Result = segmenter.segment(LanguageModel.normalize(text))
 
     private fun pickAutoCorrection(key: String, ranked: List<Suggestion>): String? {
         if (key.length < 2) return null
@@ -149,6 +167,8 @@ class SuggestionEngine(
 
     companion object {
         private const val COMPLETION_POOL = 12
+        private const val MAX_UNSPLIT_RUN = 24
+        private const val RARE_WORD_FREQ = 50
         private const val PREFIX_SAFE_COST = 0.6
         private const val PREFIX_MARGIN = 2.0
         private const val PROTECTED_MARGIN = 1.0

@@ -7,13 +7,41 @@ import kotlin.math.min
  * A frequency-weighted prefix tree. Supports exact lookup, prefix completion and
  * fuzzy (Damerau-Levenshtein) search with a pluggable substitution cost, which is
  * what lets the keyboard treat "neighbouring key" typos as cheaper than random ones.
+ *
+ * Children are kept in small parallel arrays instead of a hash map per node: most
+ * nodes have one or two children, so this uses a fraction of the memory and loads
+ * much faster on a phone.
  */
 class Trie {
 
     class Node {
-        val children = HashMap<Char, Node>(4)
-        var freq: Int = 0
-        var word: String? = null
+        @JvmField var keys: CharArray = NO_KEYS
+        @JvmField var kids: Array<Node?> = NO_KIDS
+        @JvmField var count: Int = 0
+        @JvmField var freq: Int = 0
+        @JvmField var word: String? = null
+
+        /** Highest frequency of any word at or below this node. */
+        @JvmField var best: Int = 0
+
+        fun child(c: Char): Node? {
+            for (i in 0 until count) if (keys[i] == c) return kids[i]
+            return null
+        }
+
+        fun childOrAdd(c: Char): Node {
+            child(c)?.let { return it }
+            if (count == keys.size) {
+                val size = if (count == 0) 1 else if (count < 4) count + 1 else count * 2
+                keys = keys.copyOf(size)
+                kids = kids.copyOf(size)
+            }
+            val node = Node()
+            keys[count] = c
+            kids[count] = node
+            count++
+            return node
+        }
     }
 
     data class Match(val word: String, val freq: Int, val cost: Double)
@@ -23,46 +51,85 @@ class Trie {
     var size: Int = 0
         private set
 
+    /** Sum of all word frequencies, for turning a frequency into a probability. */
+    var totalFreq: Long = 0
+        private set
+
     /** Adds [delta] to the frequency of [word], inserting it if needed. */
     fun add(word: String, delta: Int = 1) {
         if (word.isEmpty()) return
         var node = root
-        for (c in word) node = node.children.getOrPut(c) { Node() }
+        for (c in word) node = node.childOrAdd(c)
         if (node.word == null) {
             node.word = word
             size++
         }
-        node.freq = (node.freq + delta).coerceAtLeast(1)
+        val old = node.freq
+        node.freq = (old + delta).coerceAtLeast(1)
+        totalFreq += node.freq - old
+        // Keep the per-subtree maximum up to date along the path.
+        val f = node.freq
+        var n = root
+        if (n.best < f) n.best = f
+        for (c in word) {
+            n = n.child(c)!!
+            if (n.best < f) n.best = f
+        }
     }
 
     fun freq(word: String): Int = find(word)?.takeIf { it.word != null }?.freq ?: 0
 
     operator fun contains(word: String): Boolean = freq(word) > 0
 
+    /** True if some word starts with [prefix]. */
+    fun hasPrefix(prefix: String): Boolean = find(prefix) != null
+
     private fun find(prefix: String): Node? {
         var node = root
-        for (c in prefix) node = node.children[c] ?: return null
+        for (c in prefix) node = node.child(c) ?: return null
         return node
     }
 
     /** Most frequent words starting with [prefix] (the prefix itself included if it is a word). */
     fun complete(prefix: String, limit: Int): List<Match> {
         val start = find(prefix) ?: return emptyList()
-        val best = PriorityQueue<Match>(compareBy { it.freq })
+        val heap = PriorityQueue<Match>(compareBy { it.freq })
         val stack = ArrayDeque<Node>()
         stack.addLast(start)
         while (stack.isNotEmpty()) {
             val node = stack.removeLast()
+            // Nothing below this node can beat what we already have.
+            if (heap.size >= limit && node.best <= heap.peek().freq) continue
             node.word?.let { w ->
-                if (best.size < limit) best.add(Match(w, node.freq, 0.0))
-                else if (node.freq > best.peek().freq) {
-                    best.poll(); best.add(Match(w, node.freq, 0.0))
+                if (heap.size < limit) heap.add(Match(w, node.freq, 0.0))
+                else if (node.freq > heap.peek().freq) {
+                    heap.poll(); heap.add(Match(w, node.freq, 0.0))
                 }
             }
-            for (child in node.children.values) stack.addLast(child)
+            for (i in 0 until node.count) stack.addLast(node.kids[i]!!)
         }
-        return best.sortedByDescending { it.freq }
+        return heap.sortedByDescending { it.freq }
     }
+
+    /**
+     * Walks the words that start at [start] in [text]:
+     *  - [onWord] for every dictionary word text[start, end)
+     *  - [onPrefix] once if the rest of the text (to its end) is the beginning of at
+     *    least one word; it receives the frequency of the most common such word.
+     */
+    inline fun scan(text: CharSequence, start: Int, onWord: (end: Int, freq: Int) -> Unit, onPrefix: (bestFreq: Int) -> Unit) {
+        var node = rootNode()
+        var i = start
+        while (i < text.length) {
+            node = node.child(text[i]) ?: return
+            i++
+            if (node.word != null) onWord(i, node.freq)
+        }
+        if (i > start) onPrefix(node.best)
+    }
+
+    @PublishedApi
+    internal fun rootNode(): Node = root
 
     /**
      * Every word whose weighted edit distance to [target] is at most [maxCost].
@@ -78,8 +145,8 @@ class Trie {
         val n = target.length
         val firstRow = DoubleArray(n + 1)
         for (i in 1..n) firstRow[i] = firstRow[i - 1] + costs.deletion(target[i - 1])
-        for ((c, child) in root.children) {
-            search(child, c, null, firstRow, null, target, maxCost, costs, results)
+        for (k in 0 until root.count) {
+            search(root.kids[k]!!, root.keys[k], null, firstRow, null, target, maxCost, costs, results)
         }
         return results
     }
@@ -97,14 +164,12 @@ class Trie {
     ) {
         val n = target.length
         val row = DoubleArray(n + 1)
-        row[0] = prevRow[0] + costs.insertion(ch)
+        val insertion = costs.insertion(ch)
+        row[0] = prevRow[0] + insertion
         var rowMin = row[0]
         for (i in 1..n) {
             val t = target[i - 1]
-            var v = min(
-                row[i - 1] + costs.insertion(ch),
-                prevRow[i] + costs.deletion(t),
-            )
+            var v = min(row[i - 1] + insertion, prevRow[i] + costs.deletion(t))
             v = min(v, prevRow[i - 1] + if (t == ch) 0.0 else costs.substitution(t, ch))
             if (prevPrevRow != null && i > 1 && t == prevCh && target[i - 2] == ch) {
                 v = min(v, prevPrevRow[i - 2] + costs.transposition)
@@ -115,8 +180,8 @@ class Trie {
         val w = node.word
         if (w != null && row[n] <= maxCost) out.add(Match(w, node.freq, row[n]))
         if (rowMin <= maxCost) {
-            for ((c, child) in node.children) {
-                search(child, c, ch, row, prevRow, target, maxCost, costs, out)
+            for (k in 0 until node.count) {
+                search(node.kids[k]!!, node.keys[k], ch, row, prevRow, target, maxCost, costs, out)
             }
         }
     }
@@ -128,8 +193,13 @@ class Trie {
         while (stack.isNotEmpty()) {
             val node = stack.removeLast()
             node.word?.let { action(it, node.freq) }
-            for (child in node.children.values) stack.addLast(child)
+            for (i in 0 until node.count) stack.addLast(node.kids[i]!!)
         }
+    }
+
+    private companion object {
+        val NO_KEYS = CharArray(0)
+        val NO_KIDS = arrayOfNulls<Node>(0)
     }
 }
 
