@@ -30,8 +30,32 @@ notes = []
 
 
 def adb(*args, timeout=120, binary=False):
-    out = subprocess.run(["adb", *args], capture_output=True, timeout=timeout).stdout
-    return out if binary else out.decode("utf-8", "replace")
+    done = subprocess.run(["adb", *args], capture_output=True, timeout=timeout)
+    if binary:
+        return done.stdout
+    return (done.stdout + done.stderr).decode("utf-8", "replace")
+
+
+def diagnose(why):
+    """Prints what the device says, so a failure can be understood from the CI log."""
+    print(f"---- diagnostics: {why}")
+    print("enabled keyboards:", adb("shell", "ime", "list", "-s").split())
+    state = adb("shell", "dumpsys", "input_method")
+    for line in state.splitlines():
+        if re.search(r"mCurMethodId|mCurId=|mInputShown|mShowRequested|mCurFocusedWindow=|mServedView|mLastSwitchUser", line):
+            print("  " + line.strip())
+    log = adb("logcat", "-d", "-v", "brief")
+    lines = log.splitlines()
+    for i, line in enumerate(lines):
+        if "FATAL EXCEPTION" in line or (f"Process: {PKG}" in line):
+            print("\n".join(lines[i:i + 40]))
+            break
+    print("NKTEST log lines:", [l[:120] for l in lines if "NKTEST" in l][-12:])
+    root = ui_dump()
+    if root is not None:
+        print("on screen:", [(n.get("class", "").split(".")[-1], n.get("text", "")[:30], n.get("bounds"))
+                             for n in root.iter("node") if n.get("class", "").endswith(("EditText", "Button", "Switch"))][:14])
+    print("----", flush=True)
 
 
 def check(ok, message):
@@ -115,7 +139,13 @@ def main(apk, out_dir):
 
     print(adb("install", "-r", apk, timeout=300))
     adb("shell", "settings", "put", "secure", "show_ime_with_hard_keyboard", "1")
-    print(adb("shell", "ime", "enable", IME), adb("shell", "ime", "set", IME))
+    for attempt in range(5):  # the system needs a moment to notice a new keyboard
+        enabled = adb("shell", "ime", "enable", IME)
+        selected = adb("shell", "ime", "set", IME)
+        print(enabled.strip(), "|", selected.strip())
+        if IME in adb("shell", "ime", "list", "-s"):
+            break
+        time.sleep(3)
     adb("logcat", "-c")
     adb("shell", "am", "start", "-n", f"{PKG}/.SettingsActivity")
     time.sleep(5)
@@ -127,6 +157,7 @@ def main(apk, out_dir):
     if node is None:
         shot("00_no_edit_text")
         check(False, "test box (EditText) not found in the settings screen")
+        diagnose("no EditText")
         return
     x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.get("bounds")))
     adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
@@ -139,6 +170,7 @@ def main(apk, out_dir):
     shot("01_english")
     if not kb.keys:
         check(False, "keyboard did not appear (no key layout reported)")
+        diagnose("keyboard did not appear")
         return
 
     check(bool(kb.root_heights), "keyboard reported its size")
@@ -204,6 +236,11 @@ if __name__ == "__main__":
         main(sys.argv[1], sys.argv[2])
     except Exception as e:  # report, don't hide
         check(False, f"test script error: {e!r}")
+    if failures:
+        try:
+            diagnose("after failures")
+        except Exception as e:
+            print("diagnostics failed:", repr(e))
     report = "\n".join(notes + failures) + f"\n\n{len(notes)} passed, {len(failures)} failed\n"
     Path(sys.argv[2]).mkdir(parents=True, exist_ok=True)
     (Path(sys.argv[2]) / "report.txt").write_text(report)
