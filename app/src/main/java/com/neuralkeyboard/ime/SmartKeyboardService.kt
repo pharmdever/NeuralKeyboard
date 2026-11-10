@@ -195,7 +195,10 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         // The user moved the cursor away from the word we were composing: let it go.
-        if (composing.isNotEmpty() && (newSelStart != candidatesEnd || newSelEnd != candidatesEnd)) {
+        // (candidatesEnd == -1 is a report from before our composing text arrived.)
+        if (composing.isNotEmpty() && candidatesEnd != -1 &&
+            (newSelStart != candidatesEnd || newSelEnd != candidatesEnd)
+        ) {
             composing.clear()
             currentInputConnection?.finishComposingText()
             pendingUndo = null
@@ -230,8 +233,13 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         val text = if (shift != ShiftState.OFF && language.shiftedRows == null) raw.uppercase() else raw
         if (predictionOn && isWordText(text)) {
             composing.append(text)
+            // One batch: the editor reports the cursor once, after both the finished
+            // Thai word is committed and the new composing text is set. Reported
+            // separately, the first report looks like "the cursor left the word".
+            ic.beginBatchEdit()
             if (!language.spaceAfterWord) splitThaiWord(ic)
             ic.setComposingText(composing, 1)
+            ic.endBatchEdit()
         } else {
             val punctuation = text in SENTENCE_PUNCTUATION || text == ","
             commitComposing(ic, autocorrect = punctuation)

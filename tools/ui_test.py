@@ -215,12 +215,22 @@ def main(apk, out_dir):
     shot("03_thai")
     kb.refresh()
     check("ก" in kb.keys and "ๅ" in kb.keys, "Thai layout is shown after the language key")
-    for key in ["ส", "ว", "ั", "ส", "ด", "ี", "ค"]:
+    for key in ["ส", "ว", "ั", "ส", "ด", "ี"]:
+        kb.tap(key)
+    time.sleep(1)
+    text = field_text()
+    check(text.endswith("สวัสดี"), f"Thai typing arrives in the field (field: {text!r})")
+    # The next word starts: the finished word is committed, the new letter stays.
+    for key in ["ค", "ร", "ั", "บ"]:
         kb.tap(key)
     time.sleep(1)
     shot("04_typed_thai")
     text = field_text()
-    check("สวัสดีค" in text, f"Thai typing arrives in the field (field: {text!r})")
+    check(text.endswith("สวัสดีครับ"), f"Thai text keeps every letter across a word boundary (field: {text!r})")
+    kb.tap("SPACE")
+    time.sleep(1)
+    text = field_text()
+    check(text.endswith("สวัสดีครับ "), f"space after Thai text keeps it unchanged (field: {text!r})")
 
     kb.tap("SYMBOLS", pause=1.5)
     shot("05_symbols")
