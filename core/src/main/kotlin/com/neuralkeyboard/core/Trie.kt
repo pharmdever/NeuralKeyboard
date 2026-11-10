@@ -81,6 +81,9 @@ class Trie {
 
     operator fun contains(word: String): Boolean = freq(word) > 0
 
+    /** The stored String equal to [word] if it is in the dictionary, else [word] itself. */
+    fun canonical(word: String): String = find(word)?.word ?: word
+
     /** True if some word starts with [prefix]. */
     fun hasPrefix(prefix: String): Boolean = find(prefix) != null
 
@@ -143,10 +146,13 @@ class Trie {
     ): List<Match> {
         val results = ArrayList<Match>()
         val n = target.length
-        val firstRow = DoubleArray(n + 1)
-        for (i in 1..n) firstRow[i] = firstRow[i - 1] + costs.deletion(target[i - 1])
+        // One reusable row per trie depth: the search allocates nothing per node.
+        val rows = ArrayList<DoubleArray>()
+        val first = DoubleArray(n + 1)
+        for (i in 1..n) first[i] = first[i - 1] + costs.deletion(target[i - 1])
+        rows.add(first)
         for (k in 0 until root.count) {
-            search(root.kids[k]!!, root.keys[k], null, firstRow, null, target, maxCost, costs, results)
+            search(root.kids[k]!!, root.keys[k], '\u0000', 1, rows, target, maxCost, costs, results)
         }
         return results
     }
@@ -154,16 +160,19 @@ class Trie {
     private fun search(
         node: Node,
         ch: Char,
-        prevCh: Char?,
-        prevRow: DoubleArray,
-        prevPrevRow: DoubleArray?,
+        prevCh: Char,
+        depth: Int,
+        rows: ArrayList<DoubleArray>,
         target: String,
         maxCost: Double,
         costs: EditCosts,
         out: MutableList<Match>,
     ) {
         val n = target.length
-        val row = DoubleArray(n + 1)
+        if (rows.size <= depth) rows.add(DoubleArray(n + 1))
+        val row = rows[depth]
+        val prevRow = rows[depth - 1]
+        val prevPrevRow = if (depth >= 2) rows[depth - 2] else null
         val insertion = costs.insertion(ch)
         row[0] = prevRow[0] + insertion
         var rowMin = row[0]
@@ -181,7 +190,7 @@ class Trie {
         if (w != null && row[n] <= maxCost) out.add(Match(w, node.freq, row[n]))
         if (rowMin <= maxCost) {
             for (k in 0 until node.count) {
-                search(node.kids[k]!!, node.keys[k], ch, row, prevRow, target, maxCost, costs, out)
+                search(node.kids[k]!!, node.keys[k], ch, depth + 1, rows, target, maxCost, costs, out)
             }
         }
     }

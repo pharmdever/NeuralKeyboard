@@ -17,6 +17,7 @@ class SuggestionEngineTest {
         File(dictDir, "${language.code}_words.tsv").reader().use(model::loadWords)
         File(dictDir, "${language.code}_bigrams.tsv").reader().use(model::loadBigrams)
         File(dictDir, "${language.code}_shortcuts.tsv").takeIf { it.exists() }?.reader()?.use(model::loadShortcuts)
+        File(dictDir, "${language.code}_medwords.tsv").takeIf { it.exists() }?.reader()?.use(model::loadWords)
         File(dictDir, "${language.code}_medical.tsv").takeIf { it.exists() }?.reader()?.use { model.loadTerms(it) }
         return model to SuggestionEngine(model, KeyProximity.forLanguage(language))
     }
@@ -230,5 +231,27 @@ class SuggestionEngineTest {
     fun `thai next word comes from corpus bigrams`() {
         assertEquals("ข้าว", th.second.predictNext("กิน").first().word)
         assertTrue(th.second.predictNext("โรง", 10).isNotEmpty())
+    }
+
+    @Test
+    fun `medical vocabulary is known in both languages`() {
+        for (w in listOf("pneumonia", "neutropenia", "hemorrhage", "haemorrhage", "keytruda", "augmentin")) {
+            assertTrue(en.first.isKnown(w), "missing $w")
+        }
+        for (w in listOf("เบาหวาน", "ความดันโลหิตสูง", "เคมีบำบัด", "ผลข้างเคียง", "ออนแดนซีตรอน")) {
+            assertTrue(th.first.isKnown(w), "missing $w")
+        }
+        assertTrue("neutropenia" in words(en.second.suggest("neutrop")))
+        assertTrue("ความดันโลหิตสูง" in words(th.second.suggest("ความดันโล")), "got ${words(th.second.suggest("ความดันโล"))}")
+    }
+
+    @Test
+    fun `suggestions stay fast with every dictionary loaded`() {
+        val inputs = listOf("t", "teh", "recieve", "definately", "internationalisation", "pembrolizuma")
+        repeat(20) { inputs.forEach { en.second.suggest(it) } } // warm-up
+        val start = System.nanoTime()
+        repeat(20) { inputs.forEach { en.second.suggest(it) } }
+        val perCall = (System.nanoTime() - start) / 1e6 / (20 * inputs.size)
+        assertTrue(perCall < 15, "suggest() took $perCall ms on average")
     }
 }

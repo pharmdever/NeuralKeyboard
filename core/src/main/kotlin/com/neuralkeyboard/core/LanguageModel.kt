@@ -16,10 +16,33 @@ import java.io.Writer
 class LanguageModel {
 
     val words = Trie()
-    private val bigrams = HashMap<String, HashMap<String, Int>>()
+    private val bigrams = HashMap<String, Followers>()
 
     private val userWords = HashMap<String, Int>()
-    private val userBigrams = HashMap<String, HashMap<String, Int>>()
+    private val userBigrams = HashMap<String, Followers>()
+
+    /** The words seen after one word, in two small parallel arrays (compact). */
+    private class Followers {
+        var words = arrayOfNulls<String>(2)
+        var counts = IntArray(2)
+        var size = 0
+
+        fun get(word: String): Int {
+            for (i in 0 until size) if (words[i] == word) return counts[i]
+            return 0
+        }
+
+        fun add(word: String, delta: Int) {
+            for (i in 0 until size) if (words[i] == word) { counts[i] += delta; return }
+            if (size == words.size) {
+                words = words.copyOf(size * 2)
+                counts = counts.copyOf(size * 2)
+            }
+            words[size] = word
+            counts[size] = delta
+            size++
+        }
+    }
 
     /** Fixed replacements such as "im" -> "i'm" or "thx" -> "thanks". */
     private val shortcuts = HashMap<String, String>()
@@ -106,13 +129,15 @@ class LanguageModel {
     /** Most likely words to follow [previous]; the user's own habits count extra. */
     fun followers(previous: String, limit: Int): List<Pair<String, Int>> {
         val p = normalize(previous)
+        val all = bigrams[p] ?: return emptyList()
         val user = userBigrams[p]
-        return bigrams[p]
-            ?.entries
-            ?.map { (w, c) -> w to c + USER_BIGRAM_BOOST * (user?.get(w) ?: 0) }
-            ?.sortedByDescending { it.second }
-            ?.take(limit)
-            ?: emptyList()
+        val out = ArrayList<Pair<String, Int>>(all.size)
+        for (i in 0 until all.size) {
+            val w = all.words[i]!!
+            out.add(w to all.counts[i] + USER_BIGRAM_BOOST * (user?.get(w) ?: 0))
+        }
+        out.sortByDescending { it.second }
+        return if (out.size > limit) out.subList(0, limit) else out
     }
 
     /**
@@ -144,7 +169,7 @@ class LanguageModel {
     fun saveUserData(writer: Writer) {
         writer.write("# NeuralKeyboard user data v1\n")
         for ((w, f) in userWords) writer.write("W\t$w\t$f\n")
-        for ((p, map) in userBigrams) for ((w, f) in map) writer.write("B\t$p\t$w\t$f\n")
+        for ((p, f) in userBigrams) for (i in 0 until f.size) writer.write("B\t$p\t${f.words[i]}\t${f.counts[i]}\n")
         writer.flush()
     }
 
@@ -167,8 +192,9 @@ class LanguageModel {
 
     val learnedWordCount: Int get() = userWords.size
 
-    private fun addBigram(map: HashMap<String, HashMap<String, Int>>, p: String, w: String, f: Int) {
-        map.getOrPut(p) { HashMap() }.merge(w, f, Int::plus)
+    private fun addBigram(map: HashMap<String, Followers>, p: String, w: String, f: Int) {
+        // Reuse the dictionary's own String for the word instead of keeping a copy.
+        map.getOrPut(words.canonical(p)) { Followers() }.add(words.canonical(w), f)
     }
 
     private inline fun BufferedReader.forEachDataLine(action: (List<String>) -> Unit) {
