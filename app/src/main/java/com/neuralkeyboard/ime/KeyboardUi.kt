@@ -45,6 +45,9 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
     /** What the first suggestion slot is showing, if it is a special chip. */
     enum class Chip { CLIPBOARD, SNIPPET }
 
+    // Declared first: the buttons created by the property initialisers below use it.
+    private val iconCache = HashMap<Pair<Int, Int>, Drawable>()
+
     var hapticsEnabled = true
         set(value) {
             field = value
@@ -386,7 +389,6 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         return copy
     }
 
-    private val iconCache = HashMap<Pair<Int, Int>, Drawable>()
 
     private fun dp(v: Int) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), context.resources.displayMetrics,
