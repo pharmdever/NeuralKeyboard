@@ -62,7 +62,11 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
     private val pointers = SparseArray<Pointer>()
     private val handlerMain = Handler(Looper.getMainLooper())
 
-    private val rowHeight = dp(52f)
+    /**
+     * The keys always fill the same total height, whatever the layout (English with
+     * its number row, Thai, symbols), so switching never resizes the keyboard.
+     */
+    private val preferredHeight = dp(252f)
     private val gapX = dp(2.5f)
     private val gapY = dp(4f)
     private val radius = dp(7f)
@@ -77,36 +81,39 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
     private val hintPaint = text(R.color.suggestion_text, 10.5f).apply { alpha = 170 }
     private val iconSize = dp(23f)
     private val icons = HashMap<Int, Drawable>()
+    private val iconTints = HashMap<Int, Int>()
 
     /** Updates the keys. Cheap when nothing changed (e.g. most key presses). */
     fun setKeys(rows: List<KeyRow>, shift: ShiftState, enterLabel: String) {
         if (rows == this.rows && shift == this.shift && enterLabel == this.enterLabel) return
-        val heightChanged = totalHeight(rows) != totalHeight(this.rows)
+        val keysChanged = rows != this.rows
         this.rows = rows
         this.shift = shift
         this.enterLabel = enterLabel
         // Fingers still down keep their (old) key; only the drawing changes.
-        if (heightChanged) requestLayout()
-        layoutKeys()
+        // The view's size never depends on the keys, so no layout pass is needed.
+        if (keysChanged) layoutKeys()
         invalidate()
     }
 
-    private fun totalHeight(rows: List<KeyRow>) = rows.sumOf { (it.height * rowHeight).toDouble() }.toFloat()
-
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        setMeasuredDimension(width, (totalHeight(rows) + paddingTop + paddingBottom).toInt())
+        // Leave room for the app in landscape / split screen.
+        val limit = resources.displayMetrics.heightPixels * 0.5f
+        setMeasuredDimension(width, minOf(preferredHeight, limit).toInt() + paddingTop + paddingBottom)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) = layoutKeys()
 
     private fun layoutKeys() {
         val width = (width - paddingLeft - paddingRight).toFloat()
-        if (width <= 0) return
+        val height = (height - paddingTop - paddingBottom).toFloat()
+        if (width <= 0 || height <= 0 || rows.isEmpty()) return
+        val rowUnit = height / rows.sumOf { it.height.toDouble() }.toFloat()
         val out = ArrayList<KeyBox>()
         var y = paddingTop.toFloat()
         for (row in rows) {
-            val h = row.height * rowHeight
+            val h = row.height * rowUnit
             val unit = width / row.keys.sumOf { it.weight.toDouble() }.toFloat()
             var x = paddingLeft.toFloat()
             for (key in row.keys) {
@@ -119,27 +126,54 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
             y += h
         }
         boxes = out
+        if (debuggable) post(::logLayoutForTests)
+    }
+
+    private val debuggable = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+
+    /** Debug builds only: prints where each key is on screen for tools/ui_test.py. */
+    private fun logLayoutForTests() {
+        if (!isShown) return
+        val at = IntArray(2).also(::getLocationOnScreen)
+        val sb = StringBuilder("keys")
+        for (b in boxes) {
+            val name = if (b.key.type == Key.Type.CHAR) b.key.label else b.key.type.name
+            sb.append('\u241E').append(name).append('\u241F')
+                .append((at[0] + b.rect.centerX()).toInt()).append(',').append((at[1] + b.rect.centerY()).toInt())
+        }
+        android.util.Log.i("NKTEST", "view top=${at[1]} height=$height")
+        android.util.Log.i("NKTEST", sb.toString())
     }
 
     override fun onDraw(canvas: Canvas) {
-        val pressed = HashSet<KeyBox>()
-        for (i in 0 until pointers.size()) pressed.add(pointers.valueAt(i).box)
-        val pressedKeys = pressed.map { it.key }.toSet()
         val now = AnimationUtils.currentAnimationTimeMillis()
+        val animating = anims.isNotEmpty()
         for (box in boxes) {
-            val scale = scaleOf(box.key, now)
+            val scale = if (animating) scaleOf(box.key, now) else 1f
             if (scale != 1f) {
                 canvas.save()
                 canvas.scale(scale, scale, box.rect.centerX(), box.rect.centerY())
             }
-            drawKey(canvas, box, box in pressed || box.key in pressedKeys)
+            drawKey(canvas, box, isPressed(box.key))
             if (scale != 1f) canvas.restore()
         }
-        // Drop finished animations: released keys, and keys no longer on screen
-        // (e.g. a letter whose case changed). Only request frames while one runs.
-        val present = boxes.mapTo(HashSet()) { it.key }
-        anims.entries.removeAll { (key, a) -> now - a.start >= a.duration && (a.to == 1f || key !in present) }
-        if (anims.values.any { now - it.start < it.duration }) postInvalidateOnAnimation()
+        if (!animating) return
+        // Drop finished animations (a key that is still held stays shrunk until it
+        // is released; keys no longer on screen are dropped by setKeys via isPressed).
+        var running = false
+        val it = anims.entries.iterator()
+        while (it.hasNext()) {
+            val e = it.next()
+            val done = now - e.value.start >= e.value.duration
+            if (!done) running = true
+            else if (e.value.to == 1f || !isPressed(e.key)) it.remove()
+        }
+        if (running) postInvalidateOnAnimation()
+    }
+
+    private fun isPressed(key: Key): Boolean {
+        for (i in 0 until pointers.size()) if (pointers.valueAt(i).box.key == key) return true
+        return false
     }
 
     private fun scaleOf(key: Key, now: Long): Float {
@@ -192,7 +226,11 @@ class KeyboardView(context: Context, private val onKey: (Key) -> Unit) : View(co
         }
         if (icon != 0) {
             val d = icons.getOrPut(icon) { context.getDrawable(icon)!!.mutate() }
-            d.setTint(if (shiftActive) Color.WHITE else labelPaint.color)
+            val tint = if (shiftActive) Color.WHITE else labelPaint.color
+            if (iconTints[icon] != tint) {
+                d.setTint(tint)
+                iconTints[icon] = tint
+            }
             val half = iconSize / 2
             d.setBounds((r.centerX() - half).toInt(), (r.centerY() - half).toInt(), (r.centerX() + half).toInt(), (r.centerY() + half).toInt())
             d.draw(canvas)

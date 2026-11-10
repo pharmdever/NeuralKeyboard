@@ -13,7 +13,9 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.widget.BaseAdapter
+import android.widget.ListView
+import android.view.ViewGroup
 import android.widget.TextView
 import com.neuralkeyboard.core.ClipboardHistory
 import com.neuralkeyboard.core.SnippetStore
@@ -72,6 +74,7 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         gravity = Gravity.CENTER_VERTICAL
     }
     private val suggestionViews = ArrayList<TextView>()
+    private var lastSuggestions: Triple<List<String>, Int, Chip?>? = null
     private val keyboardView = KeyboardView(context) { listener.onKey(it) }
     private val panel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -112,6 +115,26 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         content.addView(body)
     }
 
+    private val debuggable = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+
+    init {
+        if (debuggable) {
+            // Debug builds only: report sizes and button positions for tools/ui_test.py.
+            root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                root.post {
+                    if (!root.isShown) return@post
+                    val at = IntArray(2)
+                    root.getLocationOnScreen(at)
+                    android.util.Log.i("NKTEST", "root top=${at[1]} height=${root.height}")
+                    for ((name, v) in listOf("clipboard" to clipButton, "snippet" to snippetButton)) {
+                        v.getLocationOnScreen(at)
+                        android.util.Log.i("NKTEST", "button $name ${at[0] + v.width / 2},${at[1] + v.height / 2}")
+                    }
+                }
+            }
+        }
+    }
+
     /** Key-press effects (A: popup, B: press animation). */
     fun setEffects(popup: Boolean, pressAnimation: Boolean) {
         keyboardView.showPreview = popup
@@ -122,25 +145,29 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
     // ------------------------------------------------------------------ panels
 
     fun showClipboard(items: List<ClipboardHistory.Item>, enabled: Boolean) {
-        val rows = when {
-            !enabled -> listOf(hint(R.string.clipboard_off))
-            items.isEmpty() -> listOf(hint(R.string.clipboard_empty))
-            else -> items.map(::clipRow)
+        val empty = when {
+            !enabled -> R.string.clipboard_off
+            items.isEmpty() -> R.string.clipboard_empty
+            else -> 0
         }
         val clear = if (items.any { !it.pinned }) {
             smallButton(context.getString(R.string.clipboard_clear), null) { listener.onClipClear() }
         } else null
-        showPanel(Panel.CLIPBOARD, R.string.clipboard_title, clear, rows)
+        showPanel(Panel.CLIPBOARD, R.string.clipboard_title, clear, empty, if (enabled) items.size else 0) { clipRow(items[it]) }
     }
 
     fun showSnippets(snippets: List<SnippetStore.Snippet>) {
-        val rows = if (snippets.isEmpty()) listOf(hint(R.string.snippets_empty)) else snippets.map(::snippetRow)
         val edit = smallButton(context.getString(R.string.snippets_edit), R.drawable.ic_edit) { listener.onEditSnippets() }
-        showPanel(Panel.SNIPPETS, R.string.snippets_title, edit, rows)
+        showPanel(Panel.SNIPPETS, R.string.snippets_title, edit, if (snippets.isEmpty()) R.string.snippets_empty else 0, snippets.size) {
+            snippetRow(snippets[it])
+        }
     }
 
-    /** Shows a panel in place of the keys (same height, so nothing jumps). */
-    private fun showPanel(which: Panel, title: Int, action: View?, rows: List<View>) {
+    /**
+     * Shows a panel in place of the keys (same height, so nothing jumps). Rows are
+     * created only as they scroll into view, so a long history opens instantly.
+     */
+    private fun showPanel(which: Panel, title: Int, action: View?, emptyText: Int, count: Int, row: (Int) -> View) {
         panel.removeAllViews()
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -157,13 +184,22 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         action?.let(header::addView)
         panel.addView(header, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(40)))
 
-        val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        rows.forEach(list::addView)
-        panel.addView(ScrollView(context).apply { addView(list) },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        val body: View = if (emptyText != 0) hint(emptyText) else ListView(context).apply {
+            divider = null
+            selector = android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+            adapter = object : BaseAdapter() {
+                override fun getCount() = count
+                override fun getItem(position: Int): Any = position
+                override fun getItemId(position: Int) = position.toLong()
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View = row(position)
+            }
+        }
+        panel.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
         // Exactly the keys' height, so opening a panel never resizes the keyboard.
-        panel.layoutParams = panel.layoutParams.apply { height = keyboardView.height }
+        if (panel.layoutParams.height != keyboardView.height) {
+            panel.layoutParams = panel.layoutParams.apply { height = keyboardView.height }
+        }
         keyboardView.visibility = View.INVISIBLE
         panel.visibility = View.VISIBLE
         openPanel = which
@@ -194,7 +230,7 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
             listener.onClipPin(item.text, !item.pinned)
         })
         row.addView(iconButton(R.drawable.ic_close, R.string.clipboard_delete, active = false) { listener.onClipDelete(item.text) })
-        return row
+        return wrapRow(row)
     }
 
     private fun snippetRow(snippet: SnippetStore.Snippet): View {
@@ -209,7 +245,7 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
         })
         row.addView(rowText(snippet.text.replace('\n', ' ').trim(), maxLines = 2),
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        return row
+        return wrapRow(row)
     }
 
     private fun listRow(onClick: () -> Unit) = LinearLayout(context).apply {
@@ -221,8 +257,12 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
             haptic(this)
             onClick()
         }
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            .apply { setMargins(dp(4), dp(3), dp(4), dp(3)) }
+    }
+
+    /** ListView ignores margins, so each row sits in a padded wrapper. */
+    private fun wrapRow(row: View) = FrameLayout(context).apply {
+        setPadding(dp(4), dp(3), dp(4), dp(3))
+        addView(row, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
     }
 
     private fun rowText(text: String, maxLines: Int) = TextView(context).apply {
@@ -237,6 +277,9 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
 
     /** Shows up to three suggestions; [highlight] marks the one space will insert. */
     fun setSuggestions(words: List<String>, highlight: Int, chip: Chip? = null) {
+        val shown = Triple(words.take(SLOTS), highlight, chip)
+        if (shown == lastSuggestions) return // nothing to redraw or re-layout
+        lastSuggestions = shown
         suggestionViews.forEachIndexed { i, tv ->
             val w = words.getOrNull(i)
             tv.text = w ?: ""
@@ -333,10 +376,17 @@ class KeyboardUi(private val context: Context, private val listener: Listener) {
     private fun color(id: Int) = context.getColor(id)
 
     /** A generated vector icon (see tools/icons), tinted for the current theme. */
-    private fun icon(res: Int, colorRes: Int, sizeDp: Int = 24): Drawable = context.getDrawable(res)!!.mutate().apply {
-        setTint(color(colorRes))
-        setBounds(0, 0, dp(sizeDp), dp(sizeDp))
+    private fun icon(res: Int, colorRes: Int, sizeDp: Int = 24): Drawable {
+        // Inflate and tint each icon once; later uses are cheap copies.
+        val base = iconCache.getOrPut(res to colorRes) {
+            context.getDrawable(res)!!.mutate().apply { setTint(color(colorRes)) }
+        }
+        val copy = base.constantState?.newDrawable(context.resources) ?: base
+        copy.setBounds(0, 0, dp(sizeDp), dp(sizeDp))
+        return copy
     }
+
+    private val iconCache = HashMap<Pair<Int, Int>, Drawable>()
 
     private fun dp(v: Int) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), context.resources.displayMetrics,

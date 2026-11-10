@@ -28,3 +28,43 @@ jobs:
         with:
           name: NeuralKeyboard-debug-apk-${{ github.run_number }}
           path: app/build/outputs/apk/debug/*.apk
+
+  ui-test:
+    # Runs the keyboard on an Android emulator: taps real keys, checks what gets
+    # typed and that the keyboard keeps its size, and saves screenshots.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: UI test on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: false
+          script: python3 tools/ui_test.py app/build/outputs/apk/debug/app-debug.apk ui-test-out
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ui-test-screenshots-${{ github.run_number }}
+          path: ui-test-out/

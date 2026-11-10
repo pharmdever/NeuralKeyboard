@@ -25,6 +25,9 @@ import com.neuralkeyboard.core.TextHarvester
 import java.util.Date
 import java.util.EnumMap
 import java.util.concurrent.Executors
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 /**
  * The smart keyboard itself.
@@ -43,6 +46,13 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     /** Suggestions are computed here so typing never waits for them. */
     private val predictor = Executors.newSingleThreadExecutor()
     @Volatile private var latestRequest = 0
+    /**
+     * Guards the language models. Reading (suggesting, splitting Thai words) can
+     * happen on the main and the predictor thread at the same time; only learning
+     * takes the write lock, and it runs on the predictor thread, so a key press
+     * never waits for a suggestion that is still being computed.
+     */
+    private val modelLock = ReentrantReadWriteLock()
     /** The (typed, previous word) that [result] was computed for. */
     private var resultFor: Pair<String, String?>? = null
 
@@ -93,7 +103,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         prefs = Prefs(this)
         language = prefs.language
         loadedResetToken = prefs.resetToken
-        ensureLoaded(language)
+        loadAllLanguages()
 
         clipboard.ttlMillis = prefs.clipboardTtlMillis
         runCatching {
@@ -113,8 +123,8 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     override fun onDestroy() {
         clipboardManager?.removePrimaryClipChangedListener(clipListener)
         saveUserData()
+        predictor.shutdown()
         io.shutdown()
-        predictor.shutdownNow()
         super.onDestroy()
     }
 
@@ -243,13 +253,14 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     /** Thai has no spaces: commit a finished word as soon as the next one starts. */
     private fun splitThaiWord(ic: InputConnection) {
         val engine = engines[language] ?: return
-        val model = models[language] ?: return
-        val (head, tail) = synchronized(model) { engine.splitFinishedWord(composing.toString()) } ?: return
-        ic.commitText(head, 1)
-        learn(head)
-        previousWord = head
-        composing.setLength(0)
-        composing.append(tail)
+        val split = modelLock.read { engine.splitWords(composing.toString()) } ?: return
+        val headLength = split.finished.sumOf { it.length }
+        ic.commitText(composing.substring(0, headLength), 1)
+        for (word in split.finished) {
+            learn(word)
+            previousWord = word
+        }
+        composing.delete(0, headLength)
     }
 
     private fun onSpace(ic: InputConnection) {
@@ -544,29 +555,44 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     /**
      * Learns words from copied text. English words are learned as typed words;
-     * Thai has no spaces, so a run is only reinforced when it is already a known word.
+     * Thai has no spaces, so each run is segmented and learned only when it splits
+     * cleanly into known words (their frequencies and word pairs are reinforced).
      */
     private fun learnFromCopiedText(text: String) {
         for ((lang, words) in TextHarvester.words(text).groupBy { it.language }) {
-            val model = models[lang]
-            if (model == null) {
+            if (models[lang] == null) {
                 pendingClipWords.getOrPut(lang) { ArrayList() }.addAll(words)
                 ensureLoaded(lang)
                 continue
             }
-            learnHarvested(model, words)
+            learnHarvested(lang, words)
         }
     }
 
-    private fun learnHarvested(model: LanguageModel, words: List<TextHarvester.Word>) {
-        synchronized(model) {
-            for (w in words) {
-                if (w.language == Language.THAI && !model.isKnown(w.text)) continue
-                model.learn(w.text, w.previous)
+    private fun learnHarvested(lang: Language, words: List<TextHarvester.Word>) {
+        val model = models[lang] ?: return
+        val engine = engines[lang] ?: return
+        predictor.execute {
+            modelLock.write {
+                for (w in words) {
+                    if (w.language != Language.THAI) {
+                        model.learn(w.text, w.previous)
+                        continue
+                    }
+                    val segmented = engine.segment(w.text)
+                    if (!segmented.clean) continue
+                    var previous: String? = null
+                    for (token in segmented.tokens) {
+                        model.learn(token, previous)
+                        previous = token
+                    }
+                }
+            }
+            main.post {
+                unsavedLearns += words.size
+                saveUserData()
             }
         }
-        unsavedLearns += words.size
-        saveUserData()
     }
 
     /** Commits the composing word, auto-correcting it if allowed, then appends [separator]. */
@@ -603,7 +629,7 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
         val request = ++latestRequest
         predictor.execute {
             if (request != latestRequest) return@execute // the user already typed more
-            val r = synchronized(model) { engine.suggest(typed, previous, KeyboardUi.SLOTS) }
+            val r = modelLock.read { engine.suggest(typed, previous, KeyboardUi.SLOTS) }
             main.post {
                 if (request != latestRequest) return@post
                 result = r
@@ -620,9 +646,8 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
     private fun freshResult(typed: String): SuggestionEngine.Result? {
         if (resultFor?.first == typed) return result
         val engine = engines[language] ?: return null
-        val model = models[language] ?: return null
         val previous = previousWord ?: wordBeforeCursor()
-        return synchronized(model) { engine.suggest(typed, previous, KeyboardUi.SLOTS) }
+        return modelLock.read { engine.suggest(typed, previous, KeyboardUi.SLOTS) }
     }
 
     private fun showSuggestions() {
@@ -692,20 +717,29 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
 
     // ---------------------------------------------------------------- model management
 
+    /** Loads the current language first, then the others, so switching is instant. */
+    private fun loadAllLanguages() {
+        ensureLoaded(language)
+        Language.entries.forEach(::ensureLoaded)
+    }
+
     private fun ensureLoaded(lang: Language) {
         if (lang in models || !loading.add(lang)) return
+        val token = loadedResetToken
         io.execute {
             val model = LanguageModel()
             try {
-                assets.open("dict/${lang.code}_words.tsv").reader().use(model::loadWords)
-                assets.open("dict/${lang.code}_bigrams.tsv").reader().use(model::loadBigrams)
                 val files = assets.list("dict").orEmpty()
-                if (prefs.medicalTerms && "${lang.code}_medical.tsv" in files) {
-                    assets.open("dict/${lang.code}_medical.tsv").reader().use { model.loadTerms(it) }
+                fun open(name: String) = assets.open("dict/${lang.code}_$name.tsv").reader()
+                fun has(name: String) = "${lang.code}_$name.tsv" in files
+                open("words").use(model::loadWords)
+                if (prefs.medicalTerms) {
+                    if (has("medwords")) open("medwords").use(model::loadWords)
+                    if (has("medical")) open("medical").use { model.loadTerms(it) }
                 }
-                if ("${lang.code}_shortcuts.tsv" in files) {
-                    assets.open("dict/${lang.code}_shortcuts.tsv").reader().use(model::loadShortcuts)
-                }
+                if (has("shortcuts")) open("shortcuts").use(model::loadShortcuts)
+                // After the words, so word pairs can share the dictionary's strings.
+                open("bigrams").use(model::loadBigrams)
                 val user = prefs.userDataFile(lang)
                 if (user.exists()) user.reader().use(model::loadUserData)
             } catch (e: Exception) {
@@ -713,46 +747,54 @@ class SmartKeyboardService : InputMethodService(), KeyboardUi.Listener {
             }
             val engine = SuggestionEngine(model, KeyProximity.forLanguage(lang))
             main.post {
+                loading.remove(lang)
+                if (token != loadedResetToken) return@post // settings changed meanwhile
                 models[lang] = model
                 engines[lang] = engine
-                loading.remove(lang)
-                pendingClipWords.remove(lang)?.let { learnHarvested(model, it) }
+                pendingClipWords.remove(lang)?.let { learnHarvested(lang, it) }
                 if (lang == language) updateSuggestions()
             }
         }
     }
 
     private fun reloadAll() {
+        saveUserData()
         models.clear()
         engines.clear()
+        loading.clear()
         loadedResetToken = prefs.resetToken
-        ensureLoaded(language)
+        loadAllLanguages()
     }
 
     private fun learn(word: String) {
         if (!learningOn) return
         val model = models[language] ?: return
         val previous = previousWord
-        synchronized(model) { model.learn(word, previous) }
+        // On the predictor thread: the main thread never waits for the write lock.
+        predictor.execute { modelLock.write { model.learn(word, previous) } }
         if (++unsavedLearns >= SAVE_EVERY) saveUserData()
     }
 
     private fun saveUserData() {
         if (unsavedLearns == 0) return
         unsavedLearns = 0
-        // Snapshot on the main thread (where the model is mutated), write in the background.
-        val snapshots = models.map { (lang, model) ->
-            lang to synchronized(model) { java.io.StringWriter().also(model::saveUserData).toString() }
-        }
-        io.execute {
-            for ((lang, data) in snapshots) {
-                try {
-                    val file = prefs.userDataFile(lang)
-                    val tmp = java.io.File(file.path + ".tmp")
-                    tmp.writeText(data)
-                    tmp.renameTo(file)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to save user data", e)
+        val current = models.toMap()
+        val files = current.keys.associateWith { prefs.userDataFile(it) }
+        // Snapshot after the learning queued so far, then write on the io thread.
+        runCatching {
+            predictor.execute {
+                val snapshots = modelLock.read {
+                    current.map { (lang, model) -> lang to java.io.StringWriter().also(model::saveUserData).toString() }
+                }
+                for ((lang, data) in snapshots) {
+                    try {
+                        val file = files.getValue(lang)
+                        val tmp = java.io.File(file.path + ".tmp")
+                        tmp.writeText(data)
+                        tmp.renameTo(file)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to save user data", e)
+                    }
                 }
             }
         }

@@ -88,19 +88,25 @@ object KeyboardLayouts {
         return out
     }
 
+    /**
+     * Symbol pages, five rows like the letter pages so the keyboard never changes
+     * height. Page 1 mirrors the long-press symbols of the letter keys.
+     */
     private fun symbols(language: Language, more: Boolean): List<KeyRow> {
         val rows = if (!more) {
             listOf(
                 chars("1234567890"),
-                chars("@#฿_&-+()/"),
-                listOf(Key(Key.Type.SYMBOLS_MORE, "1/2", weight = 1.5f)) + chars("*\"':;!?") +
+                chars("+×÷=/_<>[]"),
+                chars("!@#฿%^&*()"),
+                listOf(Key(Key.Type.SYMBOLS_MORE, "1/2", weight = 1.5f)) + chars("-'\":;,?") +
                     Key(Key.Type.DELETE, weight = 1.5f),
             )
         } else {
             listOf(
-                if (language == Language.THAI) chars("๑๒๓๔๕๖๗๘๙๐") else chars("~`|•√π÷×¶∆"),
-                chars("£€¥$^°={}%"),
-                listOf(Key(Key.Type.SYMBOLS, "2/2", weight = 1.5f)) + chars("\\[]<>©™") +
+                if (language == Language.THAI) chars("๑๒๓๔๕๖๗๘๙๐") else chars("1234567890"),
+                chars("`~\\|{}€£¥$"),
+                chars("°•○●□■♤♡◇♧"),
+                listOf(Key(Key.Type.SYMBOLS, "2/2", weight = 1.5f)) + chars("☆▪¤《》¡¿") +
                     Key(Key.Type.DELETE, weight = 1.5f),
             )
         }
